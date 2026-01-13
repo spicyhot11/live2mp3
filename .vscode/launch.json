@@ -5,10 +5,12 @@
             "name": "(gdb/lldb) Launch Backend",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/backend/build/live2mp3",
+            // 更新为新的 bin 目录
+            "program": "${workspaceFolder}/bin/live2mp3",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/backend",
+            // 调试时的工作目录设为 bin/，这样能找到 config.json
+            "cwd": "${workspaceFolder}/bin",
             "environment": [],
             "externalConsole": false,
             "MIMode": "gdb",
@@ -19,10 +21,30 @@
                     "ignoreFailures": true
                 }
             ],
-            "preLaunchTask": "3. Build Backend (Debug)",
+            // 使用我们新定义的聚合任务，确保配置被复制
+            "preLaunchTask": "Build & Setup",
             "osx": {
                 "MIMode": "lldb"
             }
+        },
+        {
+            "name": "Debug Frontend (Chrome)",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:5173",
+            "webRoot": "${workspaceFolder}/frontend/src",
+            "sourceMapPathOverrides": {
+                "webpack:///./src/*": "${webRoot}/*"
+            }
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Full Stack Debug",
+            "configurations": [
+                "(gdb/lldb) Launch Backend",
+                "Debug Frontend (Chrome)"
+            ]
         }
     ]
 }

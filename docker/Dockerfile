@@ -40,7 +40,10 @@ RUN conan install . --output-folder=build --build=missing -s build_type=Release
 COPY backend/ .
 WORKDIR /app/build
 # 使用 Conan 生成的 Toolchain 文件
-RUN cmake .. -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release && \
+# 动态查找 toolchain 文件 (不再猜测路径)
+RUN export TOOLCHAIN_FILE=$(find . -name conan_toolchain.cmake) && \
+    echo "Found toolchain at: $TOOLCHAIN_FILE" && \
+    cmake .. -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" -DCMAKE_BUILD_TYPE=Release && \
     make -j$(nproc)
 
 # ========== Stage 3: Runtime Environment ==========
@@ -69,6 +72,9 @@ COPY --from=frontend_builder /app/dist ./dist
 
 # 暴露端口
 EXPOSE 8080
+
+# 创建日志目录 (Drogon 要求目录必须存在)
+RUN mkdir -p logs
 
 # 启动命令
 CMD ["./live2mp3"]
