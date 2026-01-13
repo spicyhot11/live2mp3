@@ -1,0 +1,11 @@
+[requires]
+drogon/1.9.0
+nlohmann_json/3.11.3
+fmt/10.2.1
+
+[generators]
+CMakeDeps
+CMakeToolchain
+
+[layout]
+cmake_layout

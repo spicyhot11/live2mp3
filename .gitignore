@@ -1,0 +1,53 @@
+# ========== OS & System Files ==========
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*~
+
+# ========== Frontend (Node/Vue) ==========
+frontend/node_modules/
+frontend/dist/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.env.local
+frontend/.env.*.local
+
+# ========== Backend (C++/CMake/Conan) ==========
+# Build directories
+backend/build/
+build/
+bin/
+lib/
+*.d
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# Conan
+backend/.conan/
+conan.lock
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+*.cmake
+!backend/CMakeLists.txt
+!backend/conan_toolchain.cmake
+
+# Logs
+logs/
+*.log
+
+# Video Files (Prevent committing large media files)
+*.mp4
+*.ts
+*.mp3
+*.mkv
+*.avi
+*.mov
