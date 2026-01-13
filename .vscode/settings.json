@@ -7,5 +7,13 @@
     // 将虚拟环境的 bin 目录加入 PATH，确保能找到 conan
     "terminal.integrated.env.linux": {
         "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}"
-    }
+    },
+    "clangd.path": "/usr/bin/clangd",
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/backend/build/Debug",
+        "--background-index",
+        "--completion-style=detailed",
+        "--header-insertion=never"
+    ],
+    "cmake.sourceDirectory": "/home/code-dev/src/live2mp3/backend"
 }
