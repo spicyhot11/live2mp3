@@ -1,12 +1,8 @@
 {
-    "listeners": [
-        {
-            "address": "0.0.0.0",
-            "port": 8080,
-            "https": false
-        }
-    ],
+    "document_root": "./dist",
+    "home_page": "index.html",
     "app": {
+        "server_port": 8080,
         "number_of_threads": 0,
         "enable_server_header": true,
         "server_header_field": "Live2MP3-Server",
@@ -14,6 +10,78 @@
             "logfile_base_name": "live2mp3",
             "log_path": "./logs",
             "log_level": "DEBUG"
+        },
+        "scanner": {
+            "video_roots": [],
+            "extensions": [
+                ".mp4",
+                ".ts"
+            ],
+            "allow_list": [],
+            "deny_list": []
+        },
+        "output": {
+            "output_root": "./output",
+            "keep_original": false
+        },
+        "scheduler": {
+            "scan_interval_seconds": 60,
+            "merge_window_hours": 2
         }
-    }
+    },
+    "plugins": [
+        {
+            "name": "ConfigService",
+            "config": {
+                "config_path": "./config.json"
+            },
+            "dependencies": []
+        },
+        {
+            "name": "DatabaseService",
+            "config": {
+                "db_path": "./live2mp3.db"
+            },
+            "dependencies": []
+        },
+        {
+            "name": "HistoryService",
+            "config": {},
+            "dependencies": []
+        },
+        {
+            "name": "ConverterService",
+            "config": {},
+            "dependencies": [
+                "ConfigService",
+                "HistoryService"
+            ]
+        },
+        {
+            "name": "MergerService",
+            "config": {},
+            "dependencies": [
+                "ConfigService",
+                "HistoryService"
+            ]
+        },
+        {
+            "name": "ScannerService",
+            "config": {},
+            "dependencies": [
+                "ConfigService",
+                "HistoryService"
+            ]
+        },
+        {
+            "name": "SchedulerService",
+            "config": {},
+            "dependencies": [
+                "ConfigService",
+                "MergerService",
+                "ScannerService",
+                "ConverterService"
+            ]
+        }
+    ]
 }
