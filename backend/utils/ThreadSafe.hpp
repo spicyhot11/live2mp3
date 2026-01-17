@@ -63,4 +63,4 @@ private:
 // 为常用的 string 提供一个别名
 using ThreadSafeString = ThreadSafe<std::string>;
 
-} // namespace my_app::utils
+} // namespace utils

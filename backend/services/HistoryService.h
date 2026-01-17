@@ -17,6 +17,11 @@ void to_json(nlohmann::json &j, const HistoryRecord &p);
 
 class HistoryService : public drogon::Plugin<HistoryService> {
 public:
+  HistoryService() = default;
+  ~HistoryService() = default;
+  HistoryService(const HistoryService &) = delete;
+  HistoryService &operator=(const HistoryService &) = delete;
+
   void initAndStart(const Json::Value &config) override;
   void shutdown() override;
 
@@ -25,7 +30,4 @@ public:
                  const std::string &md5);
   bool removeRecord(int id);
   std::vector<HistoryRecord> getAll();
-
-private:
-  HistoryService() = default;
 };

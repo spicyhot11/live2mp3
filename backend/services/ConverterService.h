@@ -11,7 +11,7 @@ public:
   void initAndStart(const Json::Value &config) override;
   void shutdown() override;
 
-  ConverterService() = delete;
+  ConverterService() = default;
   ConverterService(const ConverterService &) = delete;
   ConverterService(ConverterService &&) = delete;
   ConverterService &operator=(const ConverterService &) = delete;

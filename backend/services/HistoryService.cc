@@ -11,7 +11,6 @@ void to_json(nlohmann::json &j, const HistoryRecord &p) {
                      {"processed_at", p.processed_at}};
 }
 
-
 bool HistoryService::hasProcessed(const std::string &md5) {
   sqlite3 *db = DatabaseService::getInstance().getDb();
   if (!db)
@@ -106,8 +105,7 @@ std::vector<HistoryRecord> HistoryService::getAll() {
   return records;
 }
 
-void HistoryService::initAndStart(const Json::Value &config) {
-  
-}
+void HistoryService::initAndStart(const Json::Value &config) {}
 
 void HistoryService::shutdown() {}
+

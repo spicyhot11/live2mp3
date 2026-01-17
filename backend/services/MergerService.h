@@ -9,6 +9,7 @@
 
 class MergerService : public drogon::Plugin<MergerService> {
 public:
+  MergerService() = default;
   MergerService(const MergerService &) = delete;
   MergerService(MergerService &&) = delete;
   MergerService &operator=(const MergerService &) = delete;

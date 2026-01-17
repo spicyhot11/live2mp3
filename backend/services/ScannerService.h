@@ -14,7 +14,7 @@ public:
     std::vector<std::string> files;
   };
 
-  ScannerService() = delete;
+  ScannerService() = default;
   ScannerService(const ScannerService &) = delete;
   ScannerService(ScannerService &&) = delete;
   ScannerService &operator=(const ScannerService &) = delete;

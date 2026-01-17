@@ -21,9 +21,7 @@ void MergerService::initAndStart(const Json::Value &config) {
   }
 }
 
-void MergerService::shutdown() {
-  configServicePtr = nullptr;
-}
+void MergerService::shutdown() { configServicePtr = nullptr; }
 
 void MergerService::mergeAll() {
   auto config = configServicePtr->getConfig();
@@ -212,3 +210,4 @@ bool MergerService::runFfmpegConcat(const std::string &listPath,
 
   return pclose(pipe) == 0;
 }
+

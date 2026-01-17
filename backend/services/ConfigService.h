@@ -5,6 +5,7 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <toml++/toml.hpp>
 #include <vector>
 
 struct ScannerConfig {
@@ -43,6 +44,11 @@ void from_json(const nlohmann::json &j, SchedulerConfig &p);
 
 class ConfigService : public drogon::Plugin<ConfigService> {
 public:
+  ConfigService() = default;
+  ~ConfigService() = default;
+  ConfigService(const ConfigService &) = delete;
+  ConfigService &operator=(const ConfigService &) = delete;
+
   void initAndStart(const Json::Value &config) override;
   void shutdown() override;
 
@@ -56,11 +62,6 @@ public:
   nlohmann::json toJson() const;
 
 private:
-  ConfigService() = default;
-  ~ConfigService() = default;
-  ConfigService(const ConfigService &) = delete;
-  ConfigService &operator=(const ConfigService &) = delete;
-
   mutable std::mutex configMutex_;
   AppConfig currentConfig_;
 

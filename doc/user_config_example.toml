@@ -1,0 +1,55 @@
+# Live2MP3 用户配置示例 / User Configuration Example
+# 
+# 复制此文件到运行目录，并重命名为 user_config.toml
+# Copy this file to the runtime directory and rename to user_config.toml
+
+# ============================================================
+# 服务器配置 / Server Configuration
+# ============================================================
+# 服务端口 / Server port
+server_port = 8080
+
+# ============================================================
+# 扫描器配置 / Scanner Configuration
+# ============================================================
+[scanner]
+# 视频根目录列表 / Video source directories
+video_roots = ["/path/to/videos", "/another/path"]
+
+# 支持的视频文件扩展名 / Supported video file extensions
+extensions = [".mp4", ".ts"]
+
+# 允许列表 (正则表达式) / Allow list (regex patterns)
+# 匹配这些模式的文件将被处理
+allow_list = []
+
+# 拒绝列表 (正则表达式) / Deny list (regex patterns)
+# 匹配这些模式的文件将被跳过
+deny_list = []
+
+# 简单允许列表 (字符串匹配) / Simple allow list (substring match)
+simple_allow_list = []
+
+# 简单拒绝列表 (字符串匹配) / Simple deny list (substring match)
+simple_deny_list = []
+
+# ============================================================
+# 输出配置 / Output Configuration
+# ============================================================
+[output]
+# 输出目录 / Output directory for converted files
+output_root = "./output"
+
+# 是否保留原文件 / Keep original video files after conversion
+keep_original = false
+
+# ============================================================
+# 调度器配置 / Scheduler Configuration
+# ============================================================
+[scheduler]
+# 扫描间隔（秒）/ Scan interval in seconds
+scan_interval_seconds = 60
+
+# 合并窗口（小时）/ Merge window in hours
+# 在此时间窗口内的音频文件将被合并
+merge_window_hours = 2

@@ -4,6 +4,7 @@ nlohmann_json/3.11.3
 fmt/10.2.1
 sqlite3/3.45.0
 openssl/3.2.0
+tomlplusplus/3.4.0
 
 [generators]
 CMakeDeps

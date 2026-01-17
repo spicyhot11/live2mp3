@@ -7,6 +7,11 @@
 
 class DatabaseService : public drogon::Plugin<DatabaseService> {
 public:
+  DatabaseService() = default;
+  ~DatabaseService() = default;
+  DatabaseService(const DatabaseService &) = delete;
+  DatabaseService &operator=(const DatabaseService &) = delete;
+
   void initAndStart(const Json::Value &config) override;
   void shutdown() override;
 
@@ -19,11 +24,6 @@ public:
   bool executeQuery(const std::string &query);
 
 private:
-  DatabaseService() = default;
-  ~DatabaseService() = default;
-  DatabaseService(const DatabaseService &) = delete;
-  DatabaseService &operator=(const DatabaseService &) = delete;
-
   void initSchema();
 
   sqlite3 *db_ = nullptr;

@@ -3,20 +3,18 @@
 #include <cstdio>
 #include <drogon/drogon.h>
 #include <filesystem>
-#include <fmt/core.h> // Fixed missing include
-
-namespace fs = std::filesystem;
-
+#include <fmt/core.h>
 
 #include "../utils/FileUtils.h"
 #include "HistoryService.h"
 
+namespace fs = std::filesystem;
 
 std::optional<std::string>
 ConverterService::convertToMp3(const std::string &inputPath) {
   // 0. Check History
   std::string md5 = utils::calculateMD5(inputPath);
-  if (md5.empty()) {  
+  if (md5.empty()) {
     LOG_ERROR << "Failed to calculate MD5 for: " << inputPath;
     return std::nullopt;
   }
@@ -87,15 +85,14 @@ ConverterService::determineOutputPath(const std::string &inputPath,
 bool ConverterService::runFfmpeg(const std::string &cmd) {
   std::array<char, 128> buffer;
   std::string result;
-  FILE *pipe = popen(cmd.c_str(), "r"); // Fix: FILE* pipe
+  FILE *pipe = popen(cmd.c_str(), "r");
 
   if (!pipe) {
     LOG_ERROR << "popen() failed!";
     return false;
   }
 
-  while (fgets(buffer.data(), buffer.size(), pipe) !=
-         nullptr) { // Fix: pipe instead of pipe.get()
+  while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
     result += buffer.data();
   }
 
@@ -127,6 +124,7 @@ void ConverterService::initAndStart(const Json::Value &config) {
     LOG_FATAL << "HistoryService not found";
     return;
   }
-
 }
+
 void ConverterService::shutdown() { LOG_DEBUG << "ConverterService shutdown"; }
+

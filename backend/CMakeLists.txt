@@ -9,6 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(Drogon REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(fmt REQUIRED)
+find_package(tomlplusplus REQUIRED)
 
 # ==========================================
 # 标准化输出路径
@@ -44,4 +45,5 @@ target_link_libraries(live2mp3 PRIVATE
     SQLite::SQLite3
     OpenSSL::SSL
     OpenSSL::Crypto
+    tomlplusplus::tomlplusplus
 )

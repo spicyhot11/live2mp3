@@ -14,9 +14,7 @@ void ScannerService::initAndStart(const Json::Value &config) {
   }
 }
 
-void ScannerService::shutdown() {
-  configServicePtr = nullptr;
-}
+void ScannerService::shutdown() { configServicePtr = nullptr; }
 
 ScannerService::ScanResult ScannerService::scan() {
   ScanResult result;
@@ -125,3 +123,4 @@ bool ScannerService::shouldInclude(const std::string &filepath) {
 
   return true;
 }
+

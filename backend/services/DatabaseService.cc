@@ -19,7 +19,6 @@ void DatabaseService::init(const std::string &dbPath) {
   initSchema();
 }
 
-
 sqlite3 *DatabaseService::getDb() { return db_; }
 
 bool DatabaseService::executeQuery(const std::string &query) {
@@ -47,9 +46,7 @@ void DatabaseService::initSchema() {
   }
 }
 
-void DatabaseService::initAndStart(const Json::Value &config) {
-  initSchema();
-}
+void DatabaseService::initAndStart(const Json::Value &config) { init(); }
 
 void DatabaseService::shutdown() {
   if (db_) {

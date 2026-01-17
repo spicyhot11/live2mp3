@@ -1,17 +1,21 @@
 #pragma once
 
+#include "ConfigService.h"
+#include "ConverterService.h"
+#include "MergerService.h"
+#include "ScannerService.h"
 #include <atomic>
 #include <drogon/plugins/Plugin.h>
 #include <mutex>
 #include <string>
-#include "ConfigService.h"
-#include "MergerService.h"
-#include "ScannerService.h"
-#include "ConverterService.h" 
 
-
-class SchedulerService : public drogon::Plugin<SchedulerService>  {
+class SchedulerService : public drogon::Plugin<SchedulerService> {
 public:
+  SchedulerService() = default;
+  ~SchedulerService() = default;
+  SchedulerService(const SchedulerService &) = delete;
+  SchedulerService &operator=(const SchedulerService &) = delete;
+
   void initAndStart(const Json::Value &config) override;
   void shutdown() override;
 
@@ -25,7 +29,6 @@ public:
   std::string getCurrentFile();
 
 private:
-  SchedulerService() = default;
   void runTask();
 
   ConfigService *configServicePtr = nullptr;
