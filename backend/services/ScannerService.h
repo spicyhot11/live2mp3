@@ -26,5 +26,7 @@ public:
 private:
   ConfigService *configServicePtr = nullptr;
 
-  bool shouldInclude(const std::string &filepath);
+  bool shouldInclude(const std::string &filepath,
+                     const VideoRootConfig &rootConfig,
+                     const std::vector<std::string> &extensions);
 };

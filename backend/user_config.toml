@@ -1,0 +1,22 @@
+server_port = 8080
+
+[output]
+keep_original = false
+output_root = '/home/code-dev/src/live2mp3/bin/data/output'
+
+[scanner]
+extensions = [ '.mp4', '.ts' ]
+
+    [[scanner.video_roots]]
+    filter_mode = 'blacklist'
+    path = '/home/code-dev/src/live2mp3/bin/data/videos1'
+    rules = []
+
+    [[scanner.video_roots]]
+    filter_mode = 'blacklist'
+    path = '/home/code-dev/src/live2mp3/bin/data/videos2'
+    rules = []
+
+[scheduler]
+merge_window_hours = 2
+scan_interval_seconds = 60

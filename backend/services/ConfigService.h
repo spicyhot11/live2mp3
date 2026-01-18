@@ -8,13 +8,23 @@
 #include <toml++/toml.hpp>
 #include <vector>
 
+struct FilterRule {
+  std::string pattern;
+  std::string type; // "exact", "regex", "glob"
+};
+
+struct VideoRootConfig {
+  std::string path;
+  std::string filter_mode; // "whitelist", "blacklist"
+  std::vector<FilterRule> rules;
+};
+
 struct ScannerConfig {
-  std::vector<std::string> video_roots;
+  std::vector<VideoRootConfig> video_roots; // Replaces simple string vector
   std::vector<std::string> extensions;
-  std::vector<std::string> allow_list;        // Regex
-  std::vector<std::string> deny_list;         // Regex
-  std::vector<std::string> simple_allow_list; // Simple string match
-  std::vector<std::string> simple_deny_list;  // Simple string match
+  // Legacy fields removed or deprecated.
+  // We will migarte them during load if present, but not keep them in runtime
+  // struct
 };
 
 struct OutputConfig {
@@ -28,13 +38,17 @@ struct SchedulerConfig {
 };
 
 struct AppConfig {
-  int server_port = 8080; // 端口配置
+  int server_port = 8080;
   ScannerConfig scanner;
   OutputConfig output;
   SchedulerConfig scheduler;
 };
 
-// JSON Serialization Declarations
+// JSON Serialization
+void to_json(nlohmann::json &j, const FilterRule &p);
+void from_json(const nlohmann::json &j, FilterRule &p);
+void to_json(nlohmann::json &j, const VideoRootConfig &p);
+void from_json(const nlohmann::json &j, VideoRootConfig &p);
 void to_json(nlohmann::json &j, const ScannerConfig &p);
 void from_json(const nlohmann::json &j, ScannerConfig &p);
 void to_json(nlohmann::json &j, const OutputConfig &p);

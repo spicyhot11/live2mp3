@@ -20,4 +20,7 @@ export default {
     triggerTask() {
         return apiClient.post('/trigger');
     },
+    listDirectories(path) {
+        return apiClient.post('/files/list', { path });
+    },
 };

@@ -7,13 +7,34 @@ using json = nlohmann::json;
 // ============================================================
 // JSON Serialization helpers (kept for API responses)
 // ============================================================
+// ============================================================
+// JSON Serialization helpers (kept for API responses)
+// ============================================================
+void to_json(json &j, const FilterRule &p) {
+  j = json{{"pattern", p.pattern}, {"type", p.type}};
+}
+
+void from_json(const json &j, FilterRule &p) {
+  j.at("pattern").get_to(p.pattern);
+  j.at("type").get_to(p.type);
+}
+
+void to_json(json &j, const VideoRootConfig &p) {
+  j = json{{"path", p.path},
+           {"filter_mode", p.filter_mode},
+           {"rules", p.rules}};
+}
+
+void from_json(const json &j, VideoRootConfig &p) {
+  j.at("path").get_to(p.path);
+  j.at("filter_mode").get_to(p.filter_mode);
+  if (j.contains("rules"))
+    j.at("rules").get_to(p.rules);
+}
+
 void to_json(json &j, const ScannerConfig &p) {
   j = json{{"video_roots", p.video_roots},
-           {"extensions", p.extensions},
-           {"allow_list", p.allow_list},
-           {"deny_list", p.deny_list},
-           {"simple_allow_list", p.simple_allow_list},
-           {"simple_deny_list", p.simple_deny_list}};
+           {"extensions", p.extensions}};
 }
 
 void from_json(const json &j, ScannerConfig &p) {
@@ -21,14 +42,6 @@ void from_json(const json &j, ScannerConfig &p) {
     j.at("video_roots").get_to(p.video_roots);
   if (j.contains("extensions"))
     j.at("extensions").get_to(p.extensions);
-  if (j.contains("allow_list"))
-    j.at("allow_list").get_to(p.allow_list);
-  if (j.contains("deny_list"))
-    j.at("deny_list").get_to(p.deny_list);
-  if (j.contains("simple_allow_list"))
-    j.at("simple_allow_list").get_to(p.simple_allow_list);
-  if (j.contains("simple_deny_list"))
-    j.at("simple_deny_list").get_to(p.simple_deny_list);
 }
 
 void to_json(json &j, const OutputConfig &p) {
@@ -84,21 +97,55 @@ void ConfigService::loadConfig() {
   auto lpPath = configPath_.get();
   try {
     toml::table tbl = toml::parse_file(*lpPath);
+    currentConfig_.scanner.video_roots.clear();
 
     // Scanner config
     if (auto scanner = tbl["scanner"].as_table()) {
-      currentConfig_.scanner.video_roots =
-          tomlArrayToStringVec((*scanner)["video_roots"].as_array());
+      auto roots_node = (*scanner)["video_roots"];
+      
+      if (auto roots_arr = roots_node.as_array()) {
+          // Check for legacy format (array of strings)
+          bool isLegacy = false;
+          if (!roots_arr->empty() && roots_arr->front().is_string()) {
+              isLegacy = true;
+          }
+
+          if (isLegacy) {
+              LOG_INFO << "Detected legacy config format, migrating...";
+              auto paths = tomlArrayToStringVec(roots_arr);
+              for(const auto& path : paths) {
+                  VideoRootConfig videoRoot;
+                  videoRoot.path = path;
+                  videoRoot.filter_mode = "blacklist"; 
+                  // In legacy migration, we don't migrate complex rules as they didn't exist in this structure
+                  currentConfig_.scanner.video_roots.push_back(videoRoot);
+              }
+          } else {
+              // New format: array of tables
+             for (const auto &elem : *roots_arr) {
+                if (auto rootTable = elem.as_table()) {
+                   VideoRootConfig rc;
+                   rc.path = rootTable->at("path").value_or("");
+                   rc.filter_mode = rootTable->at("filter_mode").value_or("blacklist");
+                   
+                   if (auto rulesArr = rootTable->at("rules").as_array()) {
+                       for(const auto& r : *rulesArr) {
+                           if(auto ruleTbl = r.as_table()) {
+                               FilterRule rule;
+                               rule.pattern = ruleTbl->at("pattern").value_or("");
+                               rule.type = ruleTbl->at("type").value_or("exact");
+                               rc.rules.push_back(rule);
+                           }
+                       }
+                   }
+                   currentConfig_.scanner.video_roots.push_back(rc);
+                }
+             }
+          }
+      }
+
       currentConfig_.scanner.extensions =
           tomlArrayToStringVec((*scanner)["extensions"].as_array());
-      currentConfig_.scanner.allow_list =
-          tomlArrayToStringVec((*scanner)["allow_list"].as_array());
-      currentConfig_.scanner.deny_list =
-          tomlArrayToStringVec((*scanner)["deny_list"].as_array());
-      currentConfig_.scanner.simple_allow_list =
-          tomlArrayToStringVec((*scanner)["simple_allow_list"].as_array());
-      currentConfig_.scanner.simple_deny_list =
-          tomlArrayToStringVec((*scanner)["simple_deny_list"].as_array());
     }
 
     // Output config
@@ -140,21 +187,29 @@ void ConfigService::saveConfig() {
     toml::table tbl;
 
     // Scanner section
+    toml::array rootsArr;
+    for(const auto& root : currentConfig_.scanner.video_roots) {
+        toml::table rootTable;
+        rootTable.insert("path", root.path);
+        rootTable.insert("filter_mode", root.filter_mode);
+        
+        toml::array rulesArr;
+        for(const auto& rule : root.rules) {
+            toml::table ruleTable;
+            ruleTable.insert("pattern", rule.pattern);
+            ruleTable.insert("type", rule.type);
+            rulesArr.push_back(ruleTable);
+        }
+        rootTable.insert("rules", rulesArr);
+        rootsArr.push_back(rootTable);
+    }
+
     tbl.insert_or_assign(
         "scanner",
         toml::table{
-            {"video_roots",
-             stringVecToTomlArray(currentConfig_.scanner.video_roots)},
+            {"video_roots", rootsArr},
             {"extensions",
-             stringVecToTomlArray(currentConfig_.scanner.extensions)},
-            {"allow_list",
-             stringVecToTomlArray(currentConfig_.scanner.allow_list)},
-            {"deny_list",
-             stringVecToTomlArray(currentConfig_.scanner.deny_list)},
-            {"simple_allow_list",
-             stringVecToTomlArray(currentConfig_.scanner.simple_allow_list)},
-            {"simple_deny_list",
-             stringVecToTomlArray(currentConfig_.scanner.simple_deny_list)}});
+             stringVecToTomlArray(currentConfig_.scanner.extensions)}});
 
     // Output section
     tbl.insert_or_assign(
@@ -169,6 +224,9 @@ void ConfigService::saveConfig() {
                      currentConfig_.scheduler.scan_interval_seconds},
                     {"merge_window_hours",
                      currentConfig_.scheduler.merge_window_hours}});
+           
+    // Server port
+    tbl.insert("server_port", currentConfig_.server_port);
 
     std::ofstream file(*lpPath);
     if (!file.is_open()) {

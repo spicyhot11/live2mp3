@@ -2,9 +2,54 @@
 #include "ConfigService.h"
 #include <drogon/drogon.h>
 #include <filesystem>
+#include <iostream>
 #include <regex>
 
 namespace fs = std::filesystem;
+
+// Helper for Glob matching
+static bool globMatch(const std::string &str, const std::string &pattern) {
+  std::string reStr;
+  for (size_t i = 0; i < pattern.size(); ++i) {
+    char c = pattern[i];
+    if (c == '*')
+      reStr += ".*";
+    else if (c == '?')
+      reStr += ".";
+    else if (std::string(".^+|{}()[]\\").find(c) != std::string::npos) {
+      reStr += "\\";
+      reStr += c;
+    } else {
+      reStr += c;
+    }
+  }
+  // Glob usually matches the whole string
+  // But for subdirs, maybe we match the name? Yes.
+  try {
+    std::regex re(reStr);
+    return std::regex_match(str, re);
+  } catch (...) {
+    return false;
+  }
+}
+
+static bool checkRule(const std::string &subDirName, const FilterRule &rule) {
+  if (rule.type == "exact") {
+    return subDirName == rule.pattern;
+  } else if (rule.type == "regex") {
+    try {
+      std::regex re(rule.pattern);
+      return std::regex_search(subDirName,
+                               re); // Use search for flexibility or match?
+      // "search" is more forgiving (partial match ok if regex not anchored).
+    } catch (...) {
+      return false;
+    }
+  } else if (rule.type == "glob") {
+    return globMatch(subDirName, rule.pattern);
+  }
+  return false;
+}
 
 void ScannerService::initAndStart(const Json::Value &config) {
   configServicePtr = drogon::app().getPlugin<ConfigService>();
@@ -21,37 +66,42 @@ ScannerService::ScanResult ScannerService::scan() {
   auto config = configServicePtr->getConfig();
   auto scannerConfig = config.scanner;
 
-  for (const auto &root : scannerConfig.video_roots) {
-    if (!fs::exists(root)) {
-      LOG_WARN << "Video root does not exist: " << root;
+  for (const auto &rootConfig : scannerConfig.video_roots) {
+    auto rootPath = rootConfig.path;
+    if (rootPath.empty())
+      continue;
+    if (!fs::exists(rootPath)) {
+      LOG_WARN << "Video root does not exist: " << rootPath;
       continue;
     }
 
     try {
-      for (const auto &entry : fs::recursive_directory_iterator(root)) {
+      for (const auto &entry : fs::recursive_directory_iterator(rootPath)) {
         if (entry.is_regular_file()) {
           std::string path = entry.path().string();
-          if (shouldInclude(path)) {
+          // Pass rootConfig to shouldInclude
+          if (shouldInclude(path, rootConfig, scannerConfig.extensions)) {
             result.files.push_back(path);
           }
         }
       }
     } catch (const std::exception &e) {
-      LOG_ERROR << "Error scanning root " << root << ": " << e.what();
+      LOG_ERROR << "Error scanning root " << rootPath << ": " << e.what();
     }
   }
   return result;
 }
 
-bool ScannerService::shouldInclude(const std::string &filepath) {
-  auto config = configServicePtr->getConfig();
-  auto scannerConfig = config.scanner;
+bool ScannerService::shouldInclude(const std::string &filepath,
+                                   const VideoRootConfig &rootConfig,
+                                   const std::vector<std::string> &extensions) {
+
   std::string filename = fs::path(filepath).filename().string();
   std::string extension = fs::path(filepath).extension().string();
 
   // 1. Check extension
   bool extMatch = false;
-  for (const auto &ext : scannerConfig.extensions) {
+  for (const auto &ext : extensions) {
     if (extension == ext) {
       extMatch = true;
       break;
@@ -60,67 +110,77 @@ bool ScannerService::shouldInclude(const std::string &filepath) {
   if (!extMatch)
     return false;
 
-  // 2. Check Allow Lists (Regex and Simple)
-  // If ANY allow list is not empty, we default to "deny unless allowed".
-  // If BOTH allow lists are empty, we default to "allow unless denied".
-  bool hasAllowList = !scannerConfig.allow_list.empty() ||
-                      !scannerConfig.simple_allow_list.empty();
+  // 2. Check Subdirectory Rules
+  // Get relative path from root
+  try {
+    fs::path p(filepath);
+    fs::path root(rootConfig.path);
+    fs::path relative = fs::relative(p, root);
 
-  if (hasAllowList) {
-    bool allowMatch = false;
+    // Determine the "first level subdirectory"
+    // If relative path is "a/b/c.mp4", first dir is "a".
+    // If relative path is "c.mp4", first dir is empty/root.
 
-    // Check Regex Allow List
-    for (const auto &pattern : scannerConfig.allow_list) {
-      try {
-        std::regex re(pattern);
-        if (std::regex_search(filepath, re)) {
-          allowMatch = true;
-          break;
+    std::string firstDir = "";
+    if (relative.has_parent_path()) {
+      auto it = relative.begin();
+      if (it != relative.end()) {
+        firstDir = it->string();
+        // If the file is directly in root, 'it' refers to filename?
+        // fs::relative("/root/file.mp4", "/root") -> "file.mp4"
+        // it points to "file.mp4".
+        // We want directory name.
+        // If relative path has strictly more than 1 component, the first
+        // component is a dir. If it has 1 component, it is the file itself in
+        // the root.
+
+        // Check if 'root / *it' is a directory?
+        // Or rely on logic: we filter "Subdirectories".
+        // If file is in root, it has NO subdirectory.
+        if (firstDir == relative.filename().string() &&
+            relative.begin() == --relative.end()) {
+          firstDir = ""; // File is in root
         }
-      } catch (...) {
-        // Ignore invalid regex
       }
     }
 
-    // Check Simple Allow List (Substring)
-    if (!allowMatch) {
-      for (const auto &pattern : scannerConfig.simple_allow_list) {
-        if (!pattern.empty() && filepath.find(pattern) != std::string::npos) {
-          allowMatch = true;
-          break;
-        }
+    // Now apply rules to firstDir
+    // If firstDir is empty (file in root), how to handle?
+    // - Whitelist mode: User specifies "allow list". If list ["music"], implies
+    // "only allow from music". Root file -> empty != music. Deny.
+    // - Blacklist mode: User specifies "deny list". Root file -> empty != deny
+    // rules (unless deny rule matches empty string?). Allow.
+
+    bool isWhitelist = (rootConfig.filter_mode == "whitelist");
+
+    if (rootConfig.rules.empty()) {
+      // If whitelist empty: Allow nothing? Or allow everything? Usually
+      // whitelist empty -> allow nothing. If blacklist empty: Allow everything.
+      if (isWhitelist)
+        return false;
+      else
+        return true;
+    }
+
+    bool ruleMatched = false;
+    for (const auto &rule : rootConfig.rules) {
+      if (checkRule(firstDir, rule)) {
+        ruleMatched = true;
+        break;
       }
     }
 
-    if (!allowMatch)
-      return false;
-  }
-
-  // 3. Check Deny Lists (Regex and Simple)
-
-  // Check Regex Deny List
-  if (!scannerConfig.deny_list.empty()) {
-    for (const auto &pattern : scannerConfig.deny_list) {
-      try {
-        std::regex re(pattern);
-        if (std::regex_search(filepath, re)) {
-          return false; // Matched deny list
-        }
-      } catch (...) {
-        // Ignore
-      }
+    if (isWhitelist) {
+      // In whitelist mode, we include ONLY if rule matched
+      return ruleMatched;
+    } else {
+      // In blacklist mode, we include ONLY if rule NOT matched
+      return !ruleMatched;
     }
-  }
 
-  // Check Simple Deny List
-  if (!scannerConfig.simple_deny_list.empty()) {
-    for (const auto &pattern : scannerConfig.simple_deny_list) {
-      if (!pattern.empty() && filepath.find(pattern) != std::string::npos) {
-        return false; // Matched simple deny list
-      }
-    }
+  } catch (const std::exception &) {
+    return false;
   }
 
   return true;
 }
-

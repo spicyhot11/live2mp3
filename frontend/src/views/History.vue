@@ -78,23 +78,24 @@ onMounted(fetchHistory)
 }
 h2 {
   margin: 0;
-  color: #1f2937;
+  color: var(--text-primary);
 }
 .refresh-btn {
   padding: 0.5rem 1rem;
-  background: white;
-  border: 1px solid #e5e7eb;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   cursor: pointer;
-  color: #4b5563;
+  color: var(--text-secondary);
 }
 .refresh-btn:hover {
-  background: #f9fafb;
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 .table-container {
-  background: white;
+  background: var(--bg-surface);
   border-radius: 12px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-md);
   overflow-x: auto;
 }
 table {
@@ -104,20 +105,20 @@ table {
 th, td {
   padding: 1rem;
   text-align: left;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid var(--border-color);
 }
 th {
-  background: #f9fafb;
+  background: var(--bg-surface-secondary);
   font-weight: 600;
-  color: #4b5563;
+  color: var(--text-secondary);
 }
 .mono {
   font-family: monospace;
-  color: #6b7280;
+  color: var(--text-muted);
   font-size: 0.9em;
 }
 .delete-btn {
-  color: #ef4444;
+  color: var(--danger-color);
   background: none;
   border: none;
   cursor: pointer;
@@ -128,6 +129,6 @@ th {
 .empty, .loading {
   padding: 2rem;
   text-align: center;
-  color: #6b7280;
+  color: var(--text-muted);
 }
 </style>

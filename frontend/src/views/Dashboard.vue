@@ -89,14 +89,14 @@ onUnmounted(() => {
   gap: 1.5rem;
 }
 .card {
-  background: white;
+  background: var(--bg-surface);
   border-radius: 12px;
   padding: 1.5rem;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-md);
 }
 h3 {
   margin-top: 0;
-  color: #1f2937;
+  color: var(--text-primary);
   font-size: 1.1rem;
   margin-bottom: 1rem;
 }
@@ -105,10 +105,10 @@ h3 {
   align-items: center;
   gap: 0.5rem;
   font-weight: 600;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 .status-indicator.running {
-  color: #10b981;
+  color: var(--success-color);
 }
 .dot {
   width: 8px;
@@ -119,19 +119,19 @@ h3 {
 .current-file {
   margin-top: 0.5rem;
   font-size: 0.9rem;
-  color: #4b5563;
+  color: var(--text-secondary);
   word-break: break-all;
 }
 .disk-bar {
   height: 8px;
-  background: #e5e7eb;
+  background: var(--bg-surface-secondary);
   border-radius: 4px;
   overflow: hidden;
   margin-bottom: 0.5rem;
 }
 .disk-fill {
   height: 100%;
-  background: #3b82f6;
+  background: var(--primary-color);
   border-radius: 4px;
   transition: width 0.3s ease;
 }
@@ -139,7 +139,7 @@ h3 {
   display: flex;
   justify-content: space-between;
   font-size: 0.9rem;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 .detail-item {
   display: flex;
@@ -147,6 +147,6 @@ h3 {
 }
 .value {
   font-weight: 600;
-  color: #1f2937;
+  color: var(--text-primary);
 }
 </style>
