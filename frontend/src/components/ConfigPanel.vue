@@ -158,12 +158,6 @@ onMounted(() => {
             <button @click="selectOutput">📂</button>
         </div>
       </div>
-      <div class="form-group checkbox">
-         <label>
-           <input type="checkbox" v-model="config.output.keep_original" />
-           保留原始文件
-         </label>
-      </div>
     </div>
 
     <div class="section">

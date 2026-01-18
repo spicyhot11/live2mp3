@@ -17,6 +17,11 @@ struct VideoRootConfig {
   std::string path;
   std::string filter_mode; // "whitelist", "blacklist"
   std::vector<FilterRule> rules;
+
+  // Source deletion config
+  bool enable_delete = false;
+  std::string delete_mode; // "whitelist", "blacklist"
+  std::vector<FilterRule> delete_rules;
 };
 
 struct ScannerConfig {

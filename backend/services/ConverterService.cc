@@ -7,8 +7,50 @@
 
 #include "../utils/FileUtils.h"
 #include "HistoryService.h"
+#include <regex>
 
 namespace fs = std::filesystem;
+
+// Helper for Glob matching (same as ScannerService)
+static bool globMatch(const std::string &str, const std::string &pattern) {
+  std::string reStr;
+  for (size_t i = 0; i < pattern.size(); ++i) {
+    char c = pattern[i];
+    if (c == '*')
+      reStr += ".*";
+    else if (c == '?')
+      reStr += ".";
+    else if (std::string(".^+|{}()[]\\").find(c) != std::string::npos) {
+      reStr += "\\";
+      reStr += c;
+    } else {
+      reStr += c;
+    }
+  }
+  try {
+    std::regex re(reStr);
+    return std::regex_match(str, re);
+  } catch (...) {
+    return false;
+  }
+}
+
+static bool checkDeleteRule(const std::string &subDirName,
+                            const FilterRule &rule) {
+  if (rule.type == "exact") {
+    return subDirName == rule.pattern;
+  } else if (rule.type == "regex") {
+    try {
+      std::regex re(rule.pattern);
+      return std::regex_search(subDirName, re);
+    } catch (...) {
+      return false;
+    }
+  } else if (rule.type == "glob") {
+    return globMatch(subDirName, rule.pattern);
+  }
+  return false;
+}
 
 std::optional<std::string>
 ConverterService::convertToMp3(const std::string &inputPath) {
@@ -47,8 +89,81 @@ ConverterService::convertToMp3(const std::string &inputPath) {
   if (runFfmpeg(cmd)) {
     LOG_INFO << "Conversion successful: " << outputPath;
 
-    // Handle "Keep Original"
-    if (!config.output.keep_original) {
+    // Handle source file deletion based on per-root settings
+    bool shouldDelete = false;
+
+    // Find which root this file belongs to
+    for (const auto &rootConfig : config.scanner.video_roots) {
+      fs::path rootPath(rootConfig.path);
+      fs::path inputP(inputPath);
+
+      // Check if inputPath is under this root
+      auto rel = fs::relative(inputP, rootPath);
+      if (!rel.empty() && rel.native()[0] != '.') {
+        // File is under this root
+        if (!rootConfig.enable_delete) {
+          // Deletion not enabled for this root
+          shouldDelete = false;
+          break;
+        }
+
+        // Get first subdirectory
+        std::string firstDir = "";
+        if (rel.has_parent_path()) {
+          auto it = rel.begin();
+          if (it != rel.end()) {
+            firstDir = it->string();
+            if (firstDir == rel.filename().string() &&
+                rel.begin() == --rel.end()) {
+              firstDir = ""; // File is in root directly
+            }
+          }
+        }
+
+        // Apply delete rules
+        bool isWhitelist = (rootConfig.delete_mode == "whitelist");
+
+        if (rootConfig.delete_rules.empty()) {
+          // Empty whitelist = delete nothing, Empty blacklist = delete all
+          shouldDelete = !isWhitelist;
+        } else {
+          bool ruleMatched = false;
+          for (const auto &rule : rootConfig.delete_rules) {
+            if (checkDeleteRule(firstDir, rule)) {
+              ruleMatched = true;
+              break;
+            }
+          }
+
+          if (isWhitelist) {
+            shouldDelete = ruleMatched; // Delete only matched
+          } else {
+            shouldDelete = !ruleMatched; // Delete all except matched (blacklist
+                                         // = keep these)
+          }
+        }
+        break; // Found the root, done
+      }
+    }
+
+    // Fallback to global setting if no root matched or no per-root config
+    if (!shouldDelete && !config.output.keep_original) {
+      // Global setting says don't keep = delete
+      // But per-root settings take precedence if enable_delete is configured
+      // Actually, let's check: if no root matched enable_delete, use global
+      bool anyRootHasDeleteEnabled = false;
+      for (const auto &rc : config.scanner.video_roots) {
+        if (rc.enable_delete) {
+          anyRootHasDeleteEnabled = true;
+          break;
+        }
+      }
+      if (!anyRootHasDeleteEnabled && !config.output.keep_original) {
+        shouldDelete = true;
+      }
+    }
+
+    if (shouldDelete) {
       try {
         fs::remove(inputPath);
         LOG_INFO << "Deleted original file: " << inputPath;
@@ -127,4 +242,3 @@ void ConverterService::initAndStart(const Json::Value &config) {
 }
 
 void ConverterService::shutdown() { LOG_DEBUG << "ConverterService shutdown"; }
-

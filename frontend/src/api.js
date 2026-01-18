@@ -11,6 +11,9 @@ export default {
     getStatus() {
         return apiClient.get('/status');
     },
+    getDashboardStats() {
+        return apiClient.get('/dashboard/stats');
+    },
     getConfig() {
         return apiClient.get('/config');
     },
@@ -19,6 +22,9 @@ export default {
     },
     triggerTask() {
         return apiClient.post('/trigger');
+    },
+    triggerDiskScan() {
+        return apiClient.post('/dashboard/disk_scan');
     },
     listDirectories(path) {
         return apiClient.post('/files/list', { path });

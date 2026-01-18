@@ -22,7 +22,10 @@ void from_json(const json &j, FilterRule &p) {
 void to_json(json &j, const VideoRootConfig &p) {
   j = json{{"path", p.path},
            {"filter_mode", p.filter_mode},
-           {"rules", p.rules}};
+           {"rules", p.rules},
+           {"enable_delete", p.enable_delete},
+           {"delete_mode", p.delete_mode},
+           {"delete_rules", p.delete_rules}};
 }
 
 void from_json(const json &j, VideoRootConfig &p) {
@@ -30,11 +33,17 @@ void from_json(const json &j, VideoRootConfig &p) {
   j.at("filter_mode").get_to(p.filter_mode);
   if (j.contains("rules"))
     j.at("rules").get_to(p.rules);
+
+  if (j.contains("enable_delete"))
+    j.at("enable_delete").get_to(p.enable_delete);
+  if (j.contains("delete_mode"))
+    j.at("delete_mode").get_to(p.delete_mode);
+  if (j.contains("delete_rules"))
+    j.at("delete_rules").get_to(p.delete_rules);
 }
 
 void to_json(json &j, const ScannerConfig &p) {
-  j = json{{"video_roots", p.video_roots},
-           {"extensions", p.extensions}};
+  j = json{{"video_roots", p.video_roots}, {"extensions", p.extensions}};
 }
 
 void from_json(const json &j, ScannerConfig &p) {
@@ -102,46 +111,63 @@ void ConfigService::loadConfig() {
     // Scanner config
     if (auto scanner = tbl["scanner"].as_table()) {
       auto roots_node = (*scanner)["video_roots"];
-      
-      if (auto roots_arr = roots_node.as_array()) {
-          // Check for legacy format (array of strings)
-          bool isLegacy = false;
-          if (!roots_arr->empty() && roots_arr->front().is_string()) {
-              isLegacy = true;
-          }
 
-          if (isLegacy) {
-              LOG_INFO << "Detected legacy config format, migrating...";
-              auto paths = tomlArrayToStringVec(roots_arr);
-              for(const auto& path : paths) {
-                  VideoRootConfig videoRoot;
-                  videoRoot.path = path;
-                  videoRoot.filter_mode = "blacklist"; 
-                  // In legacy migration, we don't migrate complex rules as they didn't exist in this structure
-                  currentConfig_.scanner.video_roots.push_back(videoRoot);
-              }
-          } else {
-              // New format: array of tables
-             for (const auto &elem : *roots_arr) {
-                if (auto rootTable = elem.as_table()) {
-                   VideoRootConfig rc;
-                   rc.path = rootTable->at("path").value_or("");
-                   rc.filter_mode = rootTable->at("filter_mode").value_or("blacklist");
-                   
-                   if (auto rulesArr = rootTable->at("rules").as_array()) {
-                       for(const auto& r : *rulesArr) {
-                           if(auto ruleTbl = r.as_table()) {
-                               FilterRule rule;
-                               rule.pattern = ruleTbl->at("pattern").value_or("");
-                               rule.type = ruleTbl->at("type").value_or("exact");
-                               rc.rules.push_back(rule);
-                           }
-                       }
-                   }
-                   currentConfig_.scanner.video_roots.push_back(rc);
-                }
-             }
+      if (auto roots_arr = roots_node.as_array()) {
+        // Check for legacy format (array of strings)
+        bool isLegacy = false;
+        if (!roots_arr->empty() && roots_arr->front().is_string()) {
+          isLegacy = true;
+        }
+
+        if (isLegacy) {
+          LOG_INFO << "Detected legacy config format, migrating...";
+          auto paths = tomlArrayToStringVec(roots_arr);
+          for (const auto &path : paths) {
+            VideoRootConfig videoRoot;
+            videoRoot.path = path;
+            videoRoot.filter_mode = "blacklist";
+            // In legacy migration, we don't migrate complex rules as they
+            // didn't exist in this structure
+            currentConfig_.scanner.video_roots.push_back(videoRoot);
           }
+        } else {
+          // New format: array of tables
+          for (const auto &elem : *roots_arr) {
+            if (auto rootTable = elem.as_table()) {
+              VideoRootConfig rc;
+              rc.path = rootTable->at("path").value_or("");
+              rc.filter_mode =
+                  rootTable->at("filter_mode").value_or("blacklist");
+
+              if (auto rulesArr = rootTable->at("rules").as_array()) {
+                for (const auto &r : *rulesArr) {
+                  if (auto ruleTbl = r.as_table()) {
+                    FilterRule rule;
+                    rule.pattern = ruleTbl->at("pattern").value_or("");
+                    rule.type = ruleTbl->at("type").value_or("exact");
+                    rc.rules.push_back(rule);
+                  }
+                }
+              }
+
+              rc.enable_delete = rootTable->at("enable_delete").value_or(false);
+              rc.delete_mode =
+                  rootTable->at("delete_mode").value_or("blacklist");
+
+              if (auto dRulesArr = rootTable->at("delete_rules").as_array()) {
+                for (const auto &r : *dRulesArr) {
+                  if (auto ruleTbl = r.as_table()) {
+                    FilterRule rule;
+                    rule.pattern = ruleTbl->at("pattern").value_or("");
+                    rule.type = ruleTbl->at("type").value_or("exact");
+                    rc.delete_rules.push_back(rule);
+                  }
+                }
+              }
+              currentConfig_.scanner.video_roots.push_back(rc);
+            }
+          }
+        }
       }
 
       currentConfig_.scanner.extensions =
@@ -188,28 +214,40 @@ void ConfigService::saveConfig() {
 
     // Scanner section
     toml::array rootsArr;
-    for(const auto& root : currentConfig_.scanner.video_roots) {
-        toml::table rootTable;
-        rootTable.insert("path", root.path);
-        rootTable.insert("filter_mode", root.filter_mode);
-        
-        toml::array rulesArr;
-        for(const auto& rule : root.rules) {
-            toml::table ruleTable;
-            ruleTable.insert("pattern", rule.pattern);
-            ruleTable.insert("type", rule.type);
-            rulesArr.push_back(ruleTable);
-        }
-        rootTable.insert("rules", rulesArr);
-        rootsArr.push_back(rootTable);
+    for (const auto &root : currentConfig_.scanner.video_roots) {
+      toml::table rootTable;
+      rootTable.insert("path", root.path);
+      rootTable.insert("filter_mode", root.filter_mode);
+
+      toml::array rulesArr;
+      for (const auto &rule : root.rules) {
+        toml::table ruleTable;
+        ruleTable.insert("pattern", rule.pattern);
+        ruleTable.insert("type", rule.type);
+        rulesArr.push_back(ruleTable);
+      }
+      rootTable.insert("rules", rulesArr);
+
+      rootTable.insert("enable_delete", root.enable_delete);
+      rootTable.insert("delete_mode", root.delete_mode);
+
+      toml::array deleteRulesArr;
+      for (const auto &rule : root.delete_rules) {
+        toml::table ruleTable;
+        ruleTable.insert("pattern", rule.pattern);
+        ruleTable.insert("type", rule.type);
+        deleteRulesArr.push_back(ruleTable);
+      }
+      rootTable.insert("delete_rules", deleteRulesArr);
+
+      rootsArr.push_back(rootTable);
     }
 
     tbl.insert_or_assign(
         "scanner",
-        toml::table{
-            {"video_roots", rootsArr},
-            {"extensions",
-             stringVecToTomlArray(currentConfig_.scanner.extensions)}});
+        toml::table{{"video_roots", rootsArr},
+                    {"extensions",
+                     stringVecToTomlArray(currentConfig_.scanner.extensions)}});
 
     // Output section
     tbl.insert_or_assign(
@@ -224,7 +262,7 @@ void ConfigService::saveConfig() {
                      currentConfig_.scheduler.scan_interval_seconds},
                     {"merge_window_hours",
                      currentConfig_.scheduler.merge_window_hours}});
-           
+
     // Server port
     tbl.insert("server_port", currentConfig_.server_port);
 
