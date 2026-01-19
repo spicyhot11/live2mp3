@@ -6,7 +6,7 @@
 #include <fmt/core.h>
 
 #include "../utils/FileUtils.h"
-#include "HistoryService.h"
+#include "PendingFileService.h"
 #include <regex>
 
 namespace fs = std::filesystem;
@@ -61,7 +61,7 @@ ConverterService::convertToMp3(const std::string &inputPath) {
     return std::nullopt;
   }
 
-  if (historyServicePtr->hasProcessed(md5)) {
+  if (pendingFileServicePtr->isProcessed(md5)) {
     LOG_INFO << "File already processed (MD5 match): " << inputPath;
     return std::nullopt; // Or return existing path if we knew it? For now
                          // nullopt implies "nothing done"
@@ -172,9 +172,8 @@ ConverterService::convertToMp3(const std::string &inputPath) {
       }
     }
 
-    // Record in history
-    std::string filename = fs::path(inputPath).filename().string();
-    historyServicePtr->addRecord(inputPath, filename, md5);
+    // Record in history (mark as completed)
+    pendingFileServicePtr->markAsCompleted(inputPath);
 
     return outputPath;
   } else {
@@ -190,9 +189,16 @@ ConverterService::convertToMp3(const std::string &inputPath) {
 std::string
 ConverterService::determineOutputPath(const std::string &inputPath,
                                       const std::string &outputRoot) {
+  return determineOutputPathWithExt(inputPath, outputRoot, ".mp3");
+}
+
+std::string
+ConverterService::determineOutputPathWithExt(const std::string &inputPath,
+                                             const std::string &outputRoot,
+                                             const std::string &ext) {
   fs::path p(inputPath);
   std::string parentDir = p.parent_path().filename().string();
-  std::string filename = p.stem().string() + ".mp3";
+  std::string filename = p.stem().string() + ext;
 
   return (fs::path(outputRoot) / parentDir / filename).string();
 }
@@ -221,6 +227,124 @@ bool ConverterService::runFfmpeg(const std::string &cmd) {
   return true;
 }
 
+std::optional<std::string>
+ConverterService::convertToAv1Mp4(const std::string &inputPath,
+                                  const std::string &outputDir) {
+  auto config = configServicePtr->getConfig();
+
+  // Determine output directory
+  std::string targetDir = outputDir;
+  if (targetDir.empty()) {
+    targetDir = config.temp.temp_dir.empty() ? config.output.output_root
+                                             : config.temp.temp_dir;
+  }
+
+  std::string outputPath =
+      determineOutputPathWithExt(inputPath, targetDir, ".mp4");
+
+  // Ensure output directory exists
+  try {
+    fs::create_directories(fs::path(outputPath).parent_path());
+  } catch (const fs::filesystem_error &e) {
+    LOG_ERROR << "Failed to create output directory: " << e.what();
+    return std::nullopt;
+  }
+
+  // FFmpeg command for AV1 encoding with SVT-AV1
+  // Using CRF 30 for reasonable quality/size balance
+  std::string cmd = fmt::format("ffmpeg -y -i \"{}\" -c:v libsvtav1 -crf 30 "
+                                "-preset 6 -c:a aac -b:a 128k \"{}\" 2>&1",
+                                inputPath, outputPath);
+
+  LOG_INFO << "Starting AV1 conversion: " << inputPath << " -> " << outputPath;
+
+  if (runFfmpeg(cmd)) {
+    LOG_INFO << "AV1 conversion successful: " << outputPath;
+    return outputPath;
+  } else {
+    LOG_ERROR << "AV1 conversion failed for " << inputPath;
+    // Cleanup failed output if exists
+    if (fs::exists(outputPath)) {
+      fs::remove(outputPath);
+    }
+    return std::nullopt;
+  }
+}
+
+std::optional<std::string>
+ConverterService::extractMp3FromVideo(const std::string &videoPath,
+                                      const std::string &outputDir) {
+  auto config = configServicePtr->getConfig();
+
+  std::string targetDir =
+      outputDir.empty() ? config.output.output_root : outputDir;
+
+  std::string outputPath =
+      determineOutputPathWithExt(videoPath, targetDir, ".mp3");
+
+  // Ensure output directory exists
+  try {
+    fs::create_directories(fs::path(outputPath).parent_path());
+  } catch (const fs::filesystem_error &e) {
+    LOG_ERROR << "Failed to create output directory: " << e.what();
+    return std::nullopt;
+  }
+
+  std::string cmd = fmt::format(
+      "ffmpeg -y -i \"{}\" -vn -acodec libmp3lame -q:a 2 \"{}\" 2>&1",
+      videoPath, outputPath);
+
+  LOG_INFO << "Extracting MP3 from: " << videoPath;
+
+  if (runFfmpeg(cmd)) {
+    LOG_INFO << "MP3 extraction successful: " << outputPath;
+    return outputPath;
+  } else {
+    LOG_ERROR << "MP3 extraction failed for " << videoPath;
+    if (fs::exists(outputPath)) {
+      fs::remove(outputPath);
+    }
+    return std::nullopt;
+  }
+}
+
+uint64_t ConverterService::getTempDirUsage() {
+  auto config = configServicePtr->getConfig();
+  std::string tempDir = config.temp.temp_dir;
+
+  if (tempDir.empty() || !fs::exists(tempDir)) {
+    return 0;
+  }
+
+  uint64_t size = 0;
+  try {
+    for (const auto &entry : fs::recursive_directory_iterator(
+             tempDir, fs::directory_options::skip_permission_denied)) {
+      if (fs::is_regular_file(entry.status())) {
+        size += fs::file_size(entry);
+      }
+    }
+  } catch (const std::exception &e) {
+    LOG_ERROR << "Error calculating temp dir size: " << e.what();
+  }
+  return size;
+}
+
+bool ConverterService::hasTempSpace(uint64_t requiredBytes) {
+  auto config = configServicePtr->getConfig();
+
+  // If no temp dir configured, or no limit set, always return true
+  if (config.temp.temp_dir.empty() || config.temp.size_limit_mb <= 0) {
+    return true;
+  }
+
+  uint64_t limitBytes =
+      static_cast<uint64_t>(config.temp.size_limit_mb) * 1024 * 1024;
+  uint64_t currentUsage = getTempDirUsage();
+
+  return (currentUsage + requiredBytes) <= limitBytes;
+}
+
 void ConverterService::initAndStart(const Json::Value &config) {
   LOG_DEBUG << "ConverterService initAndStart";
   if (system("ffmpeg -version > /dev/null 2>&1") != 0) {
@@ -234,9 +358,9 @@ void ConverterService::initAndStart(const Json::Value &config) {
     return;
   }
 
-  historyServicePtr = drogon::app().getPlugin<HistoryService>();
-  if (!historyServicePtr) {
-    LOG_FATAL << "HistoryService not found";
+  pendingFileServicePtr = drogon::app().getPlugin<PendingFileService>();
+  if (!pendingFileServicePtr) {
+    LOG_FATAL << "PendingFileService not found";
     return;
   }
 }

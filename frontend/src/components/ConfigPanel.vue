@@ -7,7 +7,8 @@ import FileBrowserModal from './FileBrowserModal.vue'
 const config = ref({
   scanner: { video_roots: [], extensions: [] },
   output: { output_root: '', keep_original: false },
-  scheduler: { scan_interval_seconds: 60, merge_window_hours: 2 }
+  scheduler: { scan_interval_seconds: 60, merge_window_seconds: 7200, stability_checks: 2 },
+  temp: { temp_dir: '', size_limit_mb: 0 }
 })
 
 const loading = ref(false)
@@ -19,6 +20,7 @@ const showFileBrowser = ref(false)
 const currentRootIndex = ref(-1)
 const activeRootConfig = ref(null)
 const isSelectingOutput = ref(false)
+const isSelectingTemp = ref(false)
 
 const fetchConfig = async () => {
   loading.value = true
@@ -83,6 +85,8 @@ const selectOutput = () => {
 const onFileSelected = (path) => {
     if (isSelectingOutput.value) {
         config.value.output.output_root = path
+    } else if (isSelectingTemp.value) {
+        config.value.temp.temp_dir = path
     } else {
         // Check for duplicates?
         const exists = config.value.scanner.video_roots.some(r => r.path === path);
@@ -95,6 +99,14 @@ const onFileSelected = (path) => {
         }
     }
     showFileBrowser.value = false
+    isSelectingOutput.value = false
+    isSelectingTemp.value = false
+}
+
+const selectTempDir = () => {
+    isSelectingTemp.value = true
+    isSelectingOutput.value = false
+    showFileBrowser.value = true
 }
 
 // Helpers
@@ -167,8 +179,24 @@ onMounted(() => {
         <input type="number" v-model.number="config.scheduler.scan_interval_seconds" />
       </div>
       <div class="form-group">
-        <label>合并窗口 (小时)</label>
-        <input type="number" v-model.number="config.scheduler.merge_window_hours" />
+        <label>合并窗口 (秒)</label>
+        <input type="number" v-model.number="config.scheduler.merge_window_seconds" />
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>临时目录设置</h3>
+      <div class="form-group">
+        <label>临时目录路径</label>
+        <div class="input-group">
+            <input v-model="config.temp.temp_dir" placeholder="/path/to/temp (可选)" />
+            <button @click="selectTempDir">📂</button>
+        </div>
+        <small class="hint">留空则直接输出到最终目录</small>
+      </div>
+      <div class="form-group">
+        <label>空间限制 (MB, 0=无限制)</label>
+        <input type="number" v-model.number="config.temp.size_limit_mb" min="0" />
       </div>
     </div>
 
@@ -285,4 +313,5 @@ button:hover {
 .input-group { display: flex; gap: 5px; }
 .input-group input { flex: 1; }
 .btn-sm { padding: 4px 8px; font-size: 0.9em; margin-top: 5px; }
+.hint { display: block; margin-top: 4px; font-size: 0.8em; color: var(--text-muted); }
 </style>

@@ -23,6 +23,9 @@ export default {
     triggerTask() {
         return apiClient.post('/trigger');
     },
+    getDetailedStatus() {
+        return apiClient.get('/status/detailed');
+    },
     triggerDiskScan() {
         return apiClient.post('/dashboard/disk_scan');
     },

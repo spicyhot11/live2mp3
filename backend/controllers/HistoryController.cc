@@ -1,6 +1,5 @@
 #include "HistoryController.h"
 
-
 HistoryController::HistoryController() {
   LOG_INFO << "HistoryController initialized";
   lpConfigService_ = drogon::app().getPlugin<ConfigService>();
@@ -10,10 +9,10 @@ HistoryController::HistoryController() {
     return;
   }
 
-  lpHistoryService_ = drogon::app().getPlugin<HistoryService>();
+  lpPendingFileService_ = drogon::app().getPlugin<PendingFileService>();
 
-  if (lpHistoryService_ == nullptr) {
-    LOG_FATAL << "HistoryService not found";
+  if (lpPendingFileService_ == nullptr) {
+    LOG_FATAL << "PendingFileService not found";
     return;
   }
 }
@@ -21,7 +20,7 @@ HistoryController::HistoryController() {
 void HistoryController::getAll(
     const HttpRequestPtr &req,
     std::function<void(const HttpResponsePtr &)> &&callback) {
-  auto records = lpHistoryService_->getAll();
+  auto records = lpPendingFileService_->getCompletedFiles();
   Json::Value ret;
   Json::Value arr(Json::arrayValue);
 
@@ -29,9 +28,14 @@ void HistoryController::getAll(
     Json::Value item;
     item["id"] = r.id;
     item["filepath"] = r.filepath;
-    item["filename"] = r.filename;
-    item["md5"] = r.md5;
-    item["processed_at"] = r.processed_at;
+    // Extract filename from filepath
+    size_t lastSlash = r.filepath.find_last_of("/\\");
+    std::string filename = (lastSlash == std::string::npos)
+                               ? r.filepath
+                               : r.filepath.substr(lastSlash + 1);
+    item["filename"] = filename;
+    item["md5"] = r.current_md5;
+    item["processed_at"] = r.updated_at;
     arr.append(item);
   }
 
@@ -43,7 +47,7 @@ void HistoryController::getAll(
 void HistoryController::removeRecord(
     const HttpRequestPtr &req,
     std::function<void(const HttpResponsePtr &)> &&callback, int id) {
-  bool success = lpHistoryService_->removeRecord(id);
+  bool success = lpPendingFileService_->removeFileById(id);
   Json::Value ret;
   if (success) {
     ret["status"] = "deleted";

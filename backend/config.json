@@ -11,15 +11,13 @@
             "log_level": "DEBUG"
         }
     },
-    
     "listeners": [
         {
-            "address": "0.0.0.0", 
-            "port": 8080,         
-            "https": false        
+            "address": "0.0.0.0",
+            "port": 8080,
+            "https": false
         }
     ],
-
     "plugins": [
         {
             "name": "ConfigService",
@@ -36,7 +34,7 @@
             "dependencies": []
         },
         {
-            "name": "HistoryService",
+            "name": "PendingFileService",
             "config": {},
             "dependencies": []
         },
@@ -44,24 +42,21 @@
             "name": "ConverterService",
             "config": {},
             "dependencies": [
-                "ConfigService",
-                "HistoryService"
+                "ConfigService"
             ]
         },
         {
             "name": "MergerService",
             "config": {},
             "dependencies": [
-                "ConfigService",
-                "HistoryService"
+                "ConfigService"
             ]
         },
         {
             "name": "ScannerService",
             "config": {},
             "dependencies": [
-                "ConfigService",
-                "HistoryService"
+                "ConfigService"
             ]
         },
         {

@@ -1,8 +1,14 @@
 #include "DatabaseService.h"
 
 DatabaseService &DatabaseService::getInstance() {
-  static DatabaseService instance;
-  return instance;
+  auto *instance = drogon::app().getPlugin<DatabaseService>();
+  if (instance) {
+    return *instance;
+  }
+  // Fallback to static instance (shouldn't happen in production)
+  static DatabaseService fallback;
+  LOG_WARN << "DatabaseService plugin not found, using fallback instance";
+  return fallback;
 }
 
 void DatabaseService::init(const std::string &dbPath) {
@@ -34,15 +40,22 @@ bool DatabaseService::executeQuery(const std::string &query) {
 }
 
 void DatabaseService::initSchema() {
-  const char *sql = "CREATE TABLE IF NOT EXISTS processed_files ("
-                    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                    "filepath TEXT NOT NULL,"
-                    "filename TEXT,"
-                    "md5 TEXT UNIQUE,"
-                    "processed_at DATETIME DEFAULT CURRENT_TIMESTAMP"
-                    ");";
-  if (!executeQuery(sql)) {
-    LOG_FATAL << "Failed to initialize schema";
+  // Pending files table for stability tracking
+  // We use datetime('now', 'localtime') to match system timezone (Beijing Time)
+  const char *pendingSql =
+      "CREATE TABLE IF NOT EXISTS pending_files ("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "filepath TEXT UNIQUE NOT NULL,"
+      "current_md5 TEXT,"
+      "stable_count INTEGER DEFAULT 0,"
+      "status TEXT DEFAULT 'pending',"
+      "temp_mp4_path TEXT,"
+      "temp_mp3_path TEXT,"
+      "created_at DATETIME DEFAULT (datetime('now', 'localtime')),"
+      "updated_at DATETIME DEFAULT (datetime('now', 'localtime'))"
+      ");";
+  if (!executeQuery(pendingSql)) {
+    LOG_FATAL << "Failed to initialize pending_files schema";
   }
 }
 
@@ -53,4 +66,3 @@ void DatabaseService::shutdown() {
     sqlite3_close(db_);
   }
 }
-

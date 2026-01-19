@@ -121,6 +121,24 @@ void DashboardController::runDiskScan() {
       newStats["locations"].append(rootStat);
     }
 
+    // 3. Temp Directory (if configured)
+    if (!config.temp.temp_dir.empty()) {
+      Json::Value tempStat;
+      tempStat["path"] = config.temp.temp_dir;
+      tempStat["label"] = "Temp";
+      tempStat["size_limit_mb"] = (Json::Int64)config.temp.size_limit_mb;
+      if (fs::exists(config.temp.temp_dir)) {
+        auto space = fs::space(config.temp.temp_dir);
+        tempStat["total_space"] = (Json::UInt64)space.capacity;
+        tempStat["free_space"] = (Json::UInt64)space.available;
+        tempStat["used_size"] =
+            (Json::UInt64)getDirectorySize(config.temp.temp_dir);
+      } else {
+        tempStat["error"] = "Path not found";
+      }
+      newStats["locations"].append(tempStat);
+    }
+
   } catch (const std::exception &e) {
     LOG_ERROR << "Disk scan failed: " << e.what();
     newStats["error"] = e.what();

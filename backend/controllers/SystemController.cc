@@ -30,6 +30,72 @@ void SystemController::getStatus(
   callback(resp);
 }
 
+void SystemController::getDetailedStatus(
+    const HttpRequestPtr &req,
+    std::function<void(const HttpResponsePtr &)> &&callback) {
+  Json::Value ret;
+  ret["status"] = "online";
+  ret["version"] = "1.0.0";
+
+  // Get scheduler status
+  bool running = lpSchedulerService_->isRunning();
+  std::string currentFile = lpSchedulerService_->getCurrentFile();
+  std::string currentPhase = lpSchedulerService_->getCurrentPhase();
+
+  ret["task"]["running"] = running;
+  ret["task"]["current_file"] = currentFile;
+  ret["task"]["current_phase"] = currentPhase;
+
+  // Get system resource usage
+  // CPU usage (simplified - read from /proc/stat)
+  std::ifstream statFile("/proc/stat");
+  if (statFile.is_open()) {
+    std::string line;
+    std::getline(statFile, line);
+    // Parse cpu line: cpu user nice system idle iowait irq softirq
+    unsigned long long user, nice, sys, idle, iowait, irq, softirq, steal;
+    if (sscanf(line.c_str(), "cpu %llu %llu %llu %llu %llu %llu %llu %llu",
+               &user, &nice, &sys, &idle, &iowait, &irq, &softirq,
+               &steal) >= 4) {
+      unsigned long long total =
+          user + nice + sys + idle + iowait + irq + softirq + steal;
+      unsigned long long active = user + nice + sys + irq + softirq + steal;
+      ret["system"]["cpu_total"] = (Json::Value::UInt64)total;
+      ret["system"]["cpu_active"] = (Json::Value::UInt64)active;
+    }
+    statFile.close();
+  }
+
+  // Memory usage from /proc/meminfo
+  std::ifstream memFile("/proc/meminfo");
+  if (memFile.is_open()) {
+    std::string line;
+    unsigned long long memTotal = 0, memFree = 0, memAvailable = 0, buffers = 0,
+                       cached = 0;
+    while (std::getline(memFile, line)) {
+      if (line.find("MemTotal:") == 0)
+        sscanf(line.c_str(), "MemTotal: %llu kB", &memTotal);
+      else if (line.find("MemFree:") == 0)
+        sscanf(line.c_str(), "MemFree: %llu kB", &memFree);
+      else if (line.find("MemAvailable:") == 0)
+        sscanf(line.c_str(), "MemAvailable: %llu kB", &memAvailable);
+      else if (line.find("Buffers:") == 0)
+        sscanf(line.c_str(), "Buffers: %llu kB", &buffers);
+      else if (line.find("Cached:") == 0 && line.find("SwapCached:") != 0)
+        sscanf(line.c_str(), "Cached: %llu kB", &cached);
+    }
+    memFile.close();
+
+    unsigned long long memUsed = memTotal - memAvailable;
+    ret["system"]["mem_total_kb"] = (Json::Value::UInt64)memTotal;
+    ret["system"]["mem_used_kb"] = (Json::Value::UInt64)memUsed;
+    ret["system"]["mem_available_kb"] = (Json::Value::UInt64)memAvailable;
+  }
+
+  auto resp = HttpResponse::newHttpJsonResponse(ret);
+  callback(resp);
+}
+
 void SystemController::getConfig(
     const HttpRequestPtr &req,
     std::function<void(const HttpResponsePtr &)> &&callback) {
@@ -82,10 +148,15 @@ void SystemController::updateConfig(
     if (j.contains("scheduler"))
       j.at("scheduler").get_to(scheduler);
 
+    TempConfig temp;
+    if (j.contains("temp"))
+      j.at("temp").get_to(temp);
+
     AppConfig newConfig;
     newConfig.scanner = scanner;
     newConfig.output = output;
     newConfig.scheduler = scheduler;
+    newConfig.temp = temp;
 
     lpConfigService_->updateConfig(newConfig);
     lpConfigService_->saveConfig();

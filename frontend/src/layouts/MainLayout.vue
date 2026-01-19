@@ -12,6 +12,9 @@ import ThemeToggle from '../components/ThemeToggle.vue'
         <router-link to="/" class="nav-item">
             仪表盘
         </router-link>
+        <router-link to="/files" class="nav-item">
+            文件浏览
+        </router-link>
         <router-link to="/history" class="nav-item">
             历史记录
         </router-link>

@@ -64,12 +64,26 @@ void from_json(const json &j, OutputConfig &p) {
 
 void to_json(json &j, const SchedulerConfig &p) {
   j = json{{"scan_interval_seconds", p.scan_interval_seconds},
-           {"merge_window_hours", p.merge_window_hours}};
+           {"merge_window_seconds", p.merge_window_seconds},
+           {"stability_checks", p.stability_checks}};
 }
 
 void from_json(const json &j, SchedulerConfig &p) {
   j.at("scan_interval_seconds").get_to(p.scan_interval_seconds);
-  j.at("merge_window_hours").get_to(p.merge_window_hours);
+  j.at("merge_window_seconds").get_to(p.merge_window_seconds);
+  if (j.contains("stability_checks"))
+    j.at("stability_checks").get_to(p.stability_checks);
+}
+
+void to_json(json &j, const TempConfig &p) {
+  j = json{{"temp_dir", p.temp_dir}, {"size_limit_mb", p.size_limit_mb}};
+}
+
+void from_json(const json &j, TempConfig &p) {
+  if (j.contains("temp_dir"))
+    j.at("temp_dir").get_to(p.temp_dir);
+  if (j.contains("size_limit_mb"))
+    j.at("size_limit_mb").get_to(p.size_limit_mb);
 }
 
 // ============================================================
@@ -186,8 +200,18 @@ void ConfigService::loadConfig() {
     if (auto scheduler = tbl["scheduler"].as_table()) {
       currentConfig_.scheduler.scan_interval_seconds =
           (*scheduler)["scan_interval_seconds"].value_or(60);
-      currentConfig_.scheduler.merge_window_hours =
-          (*scheduler)["merge_window_hours"].value_or(2);
+      currentConfig_.scheduler.merge_window_seconds =
+          (*scheduler)["merge_window_seconds"].value_or(7200);
+      currentConfig_.scheduler.stability_checks =
+          (*scheduler)["stability_checks"].value_or(2);
+    }
+
+    // Temp config
+    if (auto temp = tbl["temp"].as_table()) {
+      currentConfig_.temp.temp_dir =
+          (*temp)["temp_dir"].value_or(std::string(""));
+      currentConfig_.temp.size_limit_mb =
+          (*temp)["size_limit_mb"].value_or(static_cast<int64_t>(0));
     }
 
     // Server port (optional in user config)
@@ -258,10 +282,18 @@ void ConfigService::saveConfig() {
     // Scheduler section
     tbl.insert_or_assign(
         "scheduler",
-        toml::table{{"scan_interval_seconds",
-                     currentConfig_.scheduler.scan_interval_seconds},
-                    {"merge_window_hours",
-                     currentConfig_.scheduler.merge_window_hours}});
+        toml::table{
+            {"scan_interval_seconds",
+             currentConfig_.scheduler.scan_interval_seconds},
+            {"merge_window_seconds",
+             currentConfig_.scheduler.merge_window_seconds},
+            {"stability_checks", currentConfig_.scheduler.stability_checks}});
+
+    // Temp section
+    tbl.insert_or_assign(
+        "temp",
+        toml::table{{"temp_dir", currentConfig_.temp.temp_dir},
+                    {"size_limit_mb", currentConfig_.temp.size_limit_mb}});
 
     // Server port
     tbl.insert("server_port", currentConfig_.server_port);
@@ -320,5 +352,6 @@ nlohmann::json ConfigService::toJson() const {
   j["scanner"] = currentConfig_.scanner;
   j["output"] = currentConfig_.output;
   j["scheduler"] = currentConfig_.scheduler;
+  j["temp"] = currentConfig_.temp;
   return j;
 }

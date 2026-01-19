@@ -89,7 +89,7 @@ onUnmounted(() => {
             <div v-if="loc.error" class="error">{{ loc.error }}</div>
             <div v-else>
               <div class="disk-bar">
-                <div class="disk-fill" :style="{ width: ((loc.total_space - loc.free_space) / loc.total_space) * 100 + '%' }"></div>
+                <div class="disk-fill" :style="{ width: (loc.used_size / loc.total_space) * 100 + '%' }"></div>
               </div>
               <div class="disk-details">
                 <div class="detail-item">

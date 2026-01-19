@@ -7,6 +7,12 @@
 #include <string>
 #include <vector>
 
+/**
+ * @brief 文件合并服务类
+ *
+ * 负责将多个视频文件合并为一个文件。通常用于将同一时间段内的多个片段
+ * 合并为一个完整的录播文件。
+ */
 class MergerService : public drogon::Plugin<MergerService> {
 public:
   MergerService() = default;
@@ -17,23 +23,32 @@ public:
   void initAndStart(const Json::Value &config) override;
   void shutdown() override;
 
-  // Scan output directories and merge split files
-  void mergeAll();
+  /**
+   * @brief 合并多个视频文件
+   *
+   * @param files 待合并的文件路径列表
+   * @param outputDir 输出目录
+   * @return std::optional<std::string>
+   * 成功返回合并后的文件路径，失败返回nullopt
+   */
+  std::optional<std::string>
+  mergeVideoFiles(const std::vector<std::string> &files,
+                  const std::string &outputDir);
+
+  /**
+   * @brief 从文件名解析时间
+   *
+   * 尝试从文件名中解析出时间戳，用于文件排序和分组。
+   *
+   * @param filename 文件名
+   * @return std::optional<std::chrono::system_clock::time_point> 解析出的时间点
+   */
+  static std::optional<std::chrono::system_clock::time_point>
+  parseTime(const std::string &filename);
 
 private:
-  struct Mp3File {
-    std::string path;
-    std::chrono::system_clock::time_point time;
-    std::string originalFilename;
-  };
-
   ConfigService *configServicePtr = nullptr;
 
-  std::optional<std::chrono::system_clock::time_point>
-  parseTime(const std::string &filename);
-  void processDirectory(const std::string &dirPath);
-  bool mergeFiles(const std::vector<Mp3File> &files,
-                  const std::string &outputDir);
   bool runFfmpegConcat(const std::string &listPath,
                        const std::string &outputPath);
 };
