@@ -144,7 +144,7 @@ void SchedulerService::runStabilityScan() {
     }
 
     // Calculate MD5 of the file
-    std::string md5 = utils::calculateMD5(file);
+    std::string md5 = live2mp3::utils::calculateMD5(file);
     if (md5.empty()) {
       LOG_WARN << "Failed to calculate MD5 for: " << file;
       continue;

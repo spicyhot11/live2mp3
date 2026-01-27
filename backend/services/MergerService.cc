@@ -1,6 +1,5 @@
 #include "MergerService.h"
 #include "ConfigService.h"
-#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <drogon/drogon.h>

@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace utils {
+namespace live2mp3::utils {
 
 /**
  * @brief 计算文件的MD5哈希值

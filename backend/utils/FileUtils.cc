@@ -3,9 +3,8 @@
 #include <iomanip>
 #include <openssl/evp.h>
 #include <sstream>
-#include <vector>
 
-namespace utils {
+namespace live2mp3::utils {
 
 std::string calculateMD5(const std::string &filepath) {
   std::ifstream file(filepath, std::ios::binary);
@@ -38,4 +37,4 @@ std::string calculateMD5(const std::string &filepath) {
   return ss.str();
 }
 
-} // namespace utils
+} // namespace live2mp3::utils

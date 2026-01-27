@@ -2,7 +2,6 @@
 #include "ConfigService.h"
 #include <drogon/drogon.h>
 #include <filesystem>
-#include <iostream>
 #include <regex>
 
 namespace fs = std::filesystem;

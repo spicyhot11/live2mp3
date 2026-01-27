@@ -7,7 +7,7 @@ import FileBrowserModal from './FileBrowserModal.vue'
 const config = ref({
   scanner: { video_roots: [], extensions: [] },
   output: { output_root: '', keep_original: false },
-  scheduler: { scan_interval_seconds: 60, merge_window_seconds: 7200, stability_checks: 2 },
+  scheduler: { scan_interval_seconds: 60, merge_window_seconds: 7200, stability_checks: 2, ffmpeg_worker_count: 4 },
   temp: { temp_dir: '', size_limit_mb: 0 }
 })
 
@@ -181,6 +181,11 @@ onMounted(() => {
       <div class="form-group">
         <label>合并窗口 (秒)</label>
         <input type="number" v-model.number="config.scheduler.merge_window_seconds" />
+      </div>
+      <div class="form-group">
+        <label>FFmpeg 并发数</label>
+        <input type="number" v-model.number="config.scheduler.ffmpeg_worker_count" min="1" max="16" />
+        <small class="hint">建议设为 CPU 核心数或更少，重启后生效</small>
       </div>
     </div>
 

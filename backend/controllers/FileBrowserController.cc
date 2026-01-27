@@ -209,7 +209,7 @@ void FileBrowserController::browseFiles(
                       std::localtime(&time_t_val));
         fileItem["modified_at"] = std::string(timebuf);
 
-        std::string md5 = ::utils::calculateMD5(entryPath);
+        std::string md5 = live2mp3::utils::calculateMD5(entryPath);
         fileItem["md5"] = md5;
         fileItem["processed"] = lpPendingFileService_->isProcessed(md5);
 

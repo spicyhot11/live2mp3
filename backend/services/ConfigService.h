@@ -53,6 +53,7 @@ struct SchedulerConfig {
   int scan_interval_seconds;
   int merge_window_seconds = 7200; // 合并时间窗口(秒)，默认2小时
   int stability_checks = 2;        // 稳定性检查次数(连续MD5一致次数)
+  int ffmpeg_worker_count = 4;     // FFmpeg 并发 Worker 数量
 };
 
 /**
@@ -144,5 +145,5 @@ private:
   AppConfig currentConfig_;
 
   // 线程安全的配置路径管理，从本地加载的文件路径
-  utils::ThreadSafeString configPath_;
+  live2mp3::utils::ThreadSafeString configPath_;
 };

@@ -55,7 +55,7 @@ static bool checkDeleteRule(const std::string &subDirName,
 std::optional<std::string>
 ConverterService::convertToMp3(const std::string &inputPath) {
   // 0. Check History
-  std::string md5 = utils::calculateMD5(inputPath);
+  std::string md5 = live2mp3::utils::calculateMD5(inputPath);
   if (md5.empty()) {
     LOG_ERROR << "Failed to calculate MD5 for: " << inputPath;
     return std::nullopt;
@@ -214,7 +214,7 @@ bool ConverterService::runFfmpeg(const std::string &cmd) {
   }
 
   while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
-    result += buffer.data();
+    // result += buffer.data();
   }
 
   int returnCode = pclose(pipe);

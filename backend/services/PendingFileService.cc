@@ -253,6 +253,7 @@ bool PendingFileService::markAsStaged(const std::string &filepath,
 }
 
 bool PendingFileService::markAsCompleted(const std::string &filepath) {
+  drogon::app().getThreadPool();
   std::string sql =
       "UPDATE pending_files SET status = 'completed', "
       "updated_at = datetime('now', 'localtime') WHERE filepath = ?";

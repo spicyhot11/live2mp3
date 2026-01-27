@@ -68,6 +68,14 @@
                 "ScannerService",
                 "ConverterService"
             ]
+        },
+        {
+            "name": "CommonThreadService",
+            "config": {
+                "threadCount": 8,
+                "name": "CommonThreadPool"
+            },
+            "dependencies": []
         }
     ]
 }

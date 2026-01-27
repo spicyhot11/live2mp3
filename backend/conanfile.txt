@@ -1,5 +1,5 @@
 [requires]
-drogon/1.9.0
+drogon/1.9.11
 nlohmann_json/3.11.3
 fmt/10.2.1
 sqlite3/3.45.0

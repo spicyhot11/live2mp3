@@ -65,7 +65,8 @@ void from_json(const json &j, OutputConfig &p) {
 void to_json(json &j, const SchedulerConfig &p) {
   j = json{{"scan_interval_seconds", p.scan_interval_seconds},
            {"merge_window_seconds", p.merge_window_seconds},
-           {"stability_checks", p.stability_checks}};
+           {"stability_checks", p.stability_checks},
+           {"ffmpeg_worker_count", p.ffmpeg_worker_count}};
 }
 
 void from_json(const json &j, SchedulerConfig &p) {
@@ -73,6 +74,8 @@ void from_json(const json &j, SchedulerConfig &p) {
   j.at("merge_window_seconds").get_to(p.merge_window_seconds);
   if (j.contains("stability_checks"))
     j.at("stability_checks").get_to(p.stability_checks);
+  if (j.contains("ffmpeg_worker_count"))
+    j.at("ffmpeg_worker_count").get_to(p.ffmpeg_worker_count);
 }
 
 void to_json(json &j, const TempConfig &p) {
@@ -204,6 +207,8 @@ void ConfigService::loadConfig() {
           (*scheduler)["merge_window_seconds"].value_or(7200);
       currentConfig_.scheduler.stability_checks =
           (*scheduler)["stability_checks"].value_or(2);
+      currentConfig_.scheduler.ffmpeg_worker_count =
+          (*scheduler)["ffmpeg_worker_count"].value_or(4);
     }
 
     // Temp config
@@ -287,7 +292,9 @@ void ConfigService::saveConfig() {
              currentConfig_.scheduler.scan_interval_seconds},
             {"merge_window_seconds",
              currentConfig_.scheduler.merge_window_seconds},
-            {"stability_checks", currentConfig_.scheduler.stability_checks}});
+            {"stability_checks", currentConfig_.scheduler.stability_checks},
+            {"ffmpeg_worker_count",
+             currentConfig_.scheduler.ffmpeg_worker_count}});
 
     // Temp section
     tbl.insert_or_assign(
