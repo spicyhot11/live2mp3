@@ -20,7 +20,6 @@
 #include <thread>
 #include <vector>
 
-
 /*
  前向声明
 */
@@ -34,10 +33,10 @@ class FfmpegTaskProcDetail;
  * @brief 任务状态枚举
  */
 enum class FfmpegTaskStatus {
-  PENDING = 0,   ///< 等待中
-  RUNNING,   ///< 执行中
-  COMPLETED, ///< 已完成
-  FAILED= -1    ///< 失败
+  PENDING = 0, ///< 等待中
+  RUNNING,     ///< 执行中
+  COMPLETED,   ///< 已完成
+  FAILED = -1  ///< 失败
 };
 
 /**
@@ -45,9 +44,9 @@ enum class FfmpegTaskStatus {
  */
 enum class FfmpegTaskType {
   CONVERT_MP4 = 0, ///< 转换mp4任务
-  CONVERT_MP3, ///< 转换mp3任务
-  MERGE,       ///< 合并任务
-  OTHER        ///< 其他任务
+  CONVERT_MP3,     ///< 转换mp3任务
+  MERGE,           ///< 合并任务
+  OTHER            ///< 其他任务
 };
 
 /**
@@ -62,8 +61,10 @@ struct FfmpegTaskBase {
 };
 
 struct FfmpegTaskExecute {
-  std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> func;      ///< 任务执行函数
-  std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> callback; ///< 任务完成回调
+  std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)>
+      func; ///< 任务执行函数
+  std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)>
+      callback; ///< 任务完成回调
 };
 
 /**
@@ -91,24 +92,43 @@ struct FfmpegTaskProcess : public FfmpegTaskBase {
  * @brief 任务执行详情
  *
  * 存放任务的执行详情，包括任务ID、进度、状态、结果消息等。
+ * 支持通过 promise/future 机制等待任务完成。
  */
-class FfmpegTaskProcDetail : private FfmpegTaskProcess,
-                             public ThreadTaskInterface {
+class FfmpegTaskProcDetail
+    : private FfmpegTaskProcess,
+      public ThreadTaskInterface,
+      public std::enable_shared_from_this<FfmpegTaskProcDetail> {
 public:
-  FfmpegTaskProcDetail() = default;
+  FfmpegTaskProcDetail();
+
+  // 禁用拷贝构造与=
+  FfmpegTaskProcDetail(const FfmpegTaskProcDetail &) = delete;
+  FfmpegTaskProcDetail &operator=(const FfmpegTaskProcDetail &) = delete;
 
   void setPipeInfo(const live2mp3::utils::FfmpegPipeInfo &pipeInfo);
 
   std::shared_ptr<live2mp3::utils::FfmpegPipeInfo> getPipeInfo();
 
   /**
+   * @brief 取消任务
+   *
+   * 设置取消标志并尝试终止FFmpeg进程
+   */
+  void cancel();
+
+  /**
+   * @brief 检查任务是否被取消
+   */
+  bool isCancelled() const;
+
+  /**
    * @brief 获取任务结果
    */
   FfmpegTaskResult getProcessResult();
-  
+
   /**
    * @brief 虚函数接口：线程池调用
-   * 
+   * 执行任务并在完成时设置 promise
    */
   void run() override;
 
@@ -129,9 +149,18 @@ public:
   std::string getId();
 
   /**
+   * @brief 获取任务完成的 future
+   *
+   * 用于协程等待任务完成。调用者可以通过轮询或阻塞等待获取结果。
+   * @return std::shared_future<FfmpegTaskResult> 任务结果的 shared_future
+   */
+  std::shared_future<FfmpegTaskResult> getFuture();
+
+  /**
    * @brief 获取任务实例
    */
-  static std::shared_ptr<FfmpegTaskProcDetail> getInstance(const FfmpegTaskInput &input);
+  static std::shared_ptr<FfmpegTaskProcDetail>
+  getInstance(const FfmpegTaskInput &input);
 
 private:
   /**
@@ -150,6 +179,22 @@ private:
    * 管道信息是线程安全的
    */
   live2mp3::utils::ThreadSafe<live2mp3::utils::FfmpegPipeInfo> pipeInfo;
+
+  /**
+   * @brief 任务完成通知 promise
+   */
+  std::promise<FfmpegTaskResult> promise_;
+
+  /**
+   * @brief 任务完成的 shared_future
+   * 用于多个消费者等待同一个任务完成
+   */
+  std::shared_future<FfmpegTaskResult> future_;
+
+  /**
+   * @brief 取消标志
+   */
+  std::atomic<bool> cancelled_{false};
 };
 
 /**
@@ -159,24 +204,42 @@ private:
  */
 class FfAsyncChannel {
 public:
+  /**
+   * @brief 发送一个元素到通道 (协程版本，等待任务完成)
+   * @param item 任务输入
+   * @return drogon::Task<std::optional<std::string>> 成功返回任务ID，失败返回
+   * nullopt
+   */
+  drogon::Task<std::optional<std::string>> send(FfmpegTaskInput item);
 
   /**
-   * @brief 发送一个元素到通道 (非阻塞）
+   * @brief 发送一个元素到通道 (非等待版本，发射后不管)
+   *
+   * 任务会在后台异步执行，调用者无需等待任务完成。
+   * @param item 任务输入
+   * @param callback 可选的完成回调，传入任务ID（成功时）或 nullopt（失败时）
    */
-  drogon::Task<std::string> send(FfmpegTaskInput item);
+  void
+  sendAsync(FfmpegTaskInput item,
+            std::function<void(std::optional<std::string>)> callback = nullptr);
 
   /**
    * @brief 关闭通道
    */
   void close();
 
-
-  FfAsyncChannel(size_t capacity, std::shared_ptr<CommonThreadService> threadServicePtr);
+  /**
+   * @brief 构造函数
+   * @param capacity 最大并发任务数
+   * @param maxWaiting 最大等待队列长度
+   * @param threadServicePtr 线程池服务指针
+   */
+  FfAsyncChannel(size_t capacity, size_t maxWaiting,
+                 std::shared_ptr<CommonThreadService> threadServicePtr);
 
   ~FfAsyncChannel();
 
 private:
-
   /**
    * @brief 锁
    * 范围：queue_与taskMap_
@@ -191,7 +254,8 @@ private:
   /**
    * @brief 任务映射表
    */
-  std::unordered_map<std::string, std::shared_ptr<FfmpegTaskProcDetail>> taskMap_;
+  std::unordered_map<std::string, std::shared_ptr<FfmpegTaskProcDetail>>
+      taskMap_;
 
   /**
    * @brief 信号量
@@ -204,9 +268,7 @@ private:
    * 用于执行任务
    */
   std::shared_ptr<CommonThreadService> threadServicePtr_;
-
 };
-
 
 // ============================================================
 // FfmpegTaskService: 任务队列服务类
@@ -240,12 +302,7 @@ public:
    */
   void shutdown() override;
 
-
-
   static void ConvertMp4Task(FfmpegTaskInput item);
 
 private:
-  
- 
 };
-

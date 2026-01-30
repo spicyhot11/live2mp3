@@ -70,6 +70,17 @@
             ]
         },
         {
+            "name": "FfmpegTaskService",
+            "config": {
+                "maxConcurrentTasks": 8,
+                "maxWaitingTasks": 100,
+                "taskTimeoutSeconds": 600
+            },
+            "dependencies": [
+                "CommonThreadService"
+            ]
+        },
+        {
             "name": "CommonThreadService",
             "config": {
                 "threadCount": 8,

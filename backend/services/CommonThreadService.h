@@ -2,18 +2,17 @@
 
 #include <drogon/plugins/Plugin.h>
 #include <functional>
+#include <future>
 #include <memory>
 #include <string>
 #include <trantor/utils/ConcurrentTaskQueue.h>
 
-
 class ThreadTaskInterface {
 public:
-    ThreadTaskInterface() = default;
-    virtual ~ThreadTaskInterface() = default;
-    virtual void run() = 0;
+  ThreadTaskInterface() = default;
+  virtual ~ThreadTaskInterface() = default;
+  virtual void run() = 0;
 };
-
 
 /**
  * @brief CommonThreadService
@@ -55,6 +54,15 @@ public:
   void runTask(std::weak_ptr<ThreadTaskInterface> task);
 
   /**
+   * @brief 在线程池中异步运行任务，返回 future
+   *
+   * 用于协程场景，可以 co_await 等待任务完成
+   * @param task 要执行的任务函数
+   * @return std::future<void> 任务完成的 future
+   */
+  std::future<void> runTaskAsync(std::function<void()> task);
+
+  /**
    * @brief 获取当前待执行的任务数量
    * @return 任务数量
    */
@@ -65,6 +73,12 @@ public:
    * @return 线程池名称
    */
   std::string getName() const;
+
+  /**
+   * @brief 获取线程池的线程数量
+   * @return 线程数量
+   */
+  size_t getThreadCount() const;
 
 private:
   std::unique_ptr<trantor::ConcurrentTaskQueue> threadPool_; ///< 底层线程池

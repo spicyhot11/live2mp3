@@ -53,3 +53,42 @@ std::string CommonThreadService::getName() const {
   }
   return name_;
 }
+
+size_t CommonThreadService::getThreadCount() const { return threadCount_; }
+
+void CommonThreadService::runTask(std::weak_ptr<ThreadTaskInterface> task) {
+  if (threadPool_) {
+    threadPool_->runTaskInQueue([task]() {
+      if (auto sp = task.lock()) {
+        sp->run();
+      }
+    });
+  }
+}
+
+std::future<void>
+CommonThreadService::runTaskAsync(std::function<void()> task) {
+  auto promise = std::make_shared<std::promise<void>>();
+  auto future = promise->get_future();
+
+  if (threadPool_) {
+    threadPool_->runTaskInQueue([promise, task = std::move(task)]() {
+      try {
+        task();
+        // 关键修改：在EventLoop中设置promise，确保协程在EventLoop线程恢复
+        drogon::app().getLoop()->queueInLoop(
+            [promise]() { promise->set_value(); });
+      } catch (...) {
+        // 异常也在EventLoop中设置
+        drogon::app().getLoop()->queueInLoop(
+            [promise, ex = std::current_exception()]() {
+              promise->set_exception(ex);
+            });
+      }
+    });
+  } else {
+    promise->set_value(); // 如果没有线程池，直接完成
+  }
+
+  return future;
+}
