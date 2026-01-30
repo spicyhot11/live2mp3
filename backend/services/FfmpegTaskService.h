@@ -302,7 +302,11 @@ public:
    */
   void shutdown() override;
 
-  static void ConvertMp4Task(FfmpegTaskInput item);
+  static void ConvertMp4Task(std::weak_ptr<FfmpegTaskProcDetail> item);
+
+  static void ConvertMp3Task(std::weak_ptr<FfmpegTaskProcDetail> item);
+
+  static void MergeTask(std::weak_ptr<FfmpegTaskProcDetail> item);
 
 private:
 };

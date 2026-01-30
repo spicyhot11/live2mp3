@@ -26,16 +26,14 @@ static uint64_t getDirectorySize(const fs::path &dirPath) {
 
 DashboardController::DashboardController() {
   LOG_INFO << "DashboardController initialized";
-  lpConfigService_ = drogon::app().getPlugin<ConfigService>();
-
-  if (lpConfigService_ == nullptr) {
+  lpConfigService_ = drogon::app().getSharedPlugin<ConfigService>();
+  if (!lpConfigService_) {
     LOG_FATAL << "ConfigService not found";
     return;
   }
 
-  lpSchedulerService_ = drogon::app().getPlugin<SchedulerService>();
-
-  if (lpSchedulerService_ == nullptr) {
+  lpSchedulerService_ = drogon::app().getSharedPlugin<SchedulerService>();
+  if (!lpSchedulerService_) {
     LOG_FATAL << "SchedulerService not found";
     return;
   }

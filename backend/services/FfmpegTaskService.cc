@@ -2,7 +2,6 @@
 #include "../utils/CoroUtils.hpp"
 #include "ConverterService.h"
 #include "MergerService.h"
-#include <algorithm>
 #include <chrono>
 #include <drogon/drogon.h>
 
@@ -271,7 +270,7 @@ void FfmpegTaskService::initAndStart(const Json::Value &config) {
   }
 
   // 获取CommonThreadService的线程数
-  auto threadService = drogon::app().getPlugin<CommonThreadService>();
+  auto threadService = drogon::app().getSharedPlugin<CommonThreadService>();
   size_t threadCount = threadService->getThreadCount();
 
   // 验证：容量不超过线程数
@@ -289,6 +288,200 @@ void FfmpegTaskService::initAndStart(const Json::Value &config) {
 
 void FfmpegTaskService::shutdown() { LOG_INFO << "FfmpegTaskService shutdown"; }
 
-void FfmpegTaskService::ConvertMp4Task(FfmpegTaskInput item) {
-  // TODO: 实现 MP4 转换任务
+void FfmpegTaskService::ConvertMp4Task(
+    std::weak_ptr<FfmpegTaskProcDetail> item) {
+  auto detail = item.lock();
+  if (!detail) {
+    LOG_WARN << "FfmpegTaskService::ConvertMp4Task: 任务详情已过期";
+    return;
+  }
+
+  // 获取 ConverterService
+  auto converterService = drogon::app().getSharedPlugin<ConverterService>();
+  if (!converterService) {
+    LOG_ERROR
+        << "FfmpegTaskService::ConvertMp4Task: 获取 ConverterService 失败";
+    return;
+  }
+
+  // 获取任务信息
+  auto result = detail->getProcessResult();
+  const auto &inputFiles = result.files;
+  const auto &outputDirs = result.outputFiles;
+
+  if (inputFiles.empty()) {
+    LOG_WARN << "FfmpegTaskService::ConvertMp4Task: 无输入文件";
+    return;
+  }
+
+  if (outputDirs.empty()) {
+    LOG_ERROR << "FfmpegTaskService::ConvertMp4Task: 未指定输出目录";
+    return;
+  }
+
+  std::string outputDir = outputDirs[0];
+  std::string resultMessage;
+  bool hasError = false;
+  int successCount = 0;
+
+  // 创建进度回调，用于更新任务状态
+  auto progressCallback = [item](const live2mp3::utils::FfmpegPipeInfo &info) {
+    if (auto detail = item.lock()) {
+      detail->setPipeInfo(info);
+    }
+  };
+
+  for (const auto &inputPath : inputFiles) {
+    if (detail->isCancelled()) {
+      resultMessage = "任务已取消";
+      hasError = true;
+      break;
+    }
+
+    // 调用 ConverterService 进行转换
+    auto outputPath = converterService->convertToAv1Mp4(inputPath, outputDir,
+                                                        progressCallback);
+    if (outputPath) {
+      successCount++;
+      LOG_INFO << "ConvertMp4Task: 转换成功 " << inputPath << " -> "
+               << *outputPath;
+    } else {
+      hasError = true;
+      resultMessage += "转换失败: " + inputPath + "; ";
+      LOG_ERROR << "ConvertMp4Task: 转换失败 " << inputPath;
+    }
+  }
+
+  if (!hasError) {
+    resultMessage = "成功转换 " + std::to_string(successCount) + " 个文件";
+  }
+
+  LOG_DEBUG << "ConvertMp4Task 完成: " << resultMessage;
+}
+
+void FfmpegTaskService::ConvertMp3Task(
+    std::weak_ptr<FfmpegTaskProcDetail> item) {
+  auto detail = item.lock();
+  if (!detail) {
+    LOG_WARN << "FfmpegTaskService::ConvertMp3Task: 任务详情已过期";
+    return;
+  }
+
+  // 获取 ConverterService
+  auto converterService = drogon::app().getSharedPlugin<ConverterService>();
+  if (!converterService) {
+    LOG_ERROR
+        << "FfmpegTaskService::ConvertMp3Task: 获取 ConverterService 失败";
+    return;
+  }
+
+  // 获取任务信息
+  auto result = detail->getProcessResult();
+  const auto &inputFiles = result.files;
+  const auto &outputDirs = result.outputFiles;
+
+  if (inputFiles.empty()) {
+    LOG_WARN << "FfmpegTaskService::ConvertMp3Task: 无输入文件";
+    return;
+  }
+
+  if (outputDirs.empty()) {
+    LOG_ERROR << "FfmpegTaskService::ConvertMp3Task: 未指定输出目录";
+    return;
+  }
+
+  std::string outputDir = outputDirs[0];
+  std::string resultMessage;
+  bool hasError = false;
+  int successCount = 0;
+
+  // 创建进度回调
+  auto progressCallback = [item](const live2mp3::utils::FfmpegPipeInfo &info) {
+    if (auto detail = item.lock()) {
+      detail->setPipeInfo(info);
+    }
+  };
+
+  for (const auto &inputPath : inputFiles) {
+    if (detail->isCancelled()) {
+      resultMessage = "任务已取消";
+      hasError = true;
+      break;
+    }
+
+    // 调用 ConverterService 提取 MP3
+    auto outputPath = converterService->extractMp3FromVideo(
+        inputPath, outputDir, progressCallback);
+    if (outputPath) {
+      successCount++;
+      LOG_INFO << "ConvertMp3Task: 提取成功 " << inputPath << " -> "
+               << *outputPath;
+    } else {
+      hasError = true;
+      resultMessage += "提取失败: " + inputPath + "; ";
+      LOG_ERROR << "ConvertMp3Task: 提取失败 " << inputPath;
+    }
+  }
+
+  if (!hasError) {
+    resultMessage = "成功提取 " + std::to_string(successCount) + " 个文件";
+  }
+
+  LOG_DEBUG << "ConvertMp3Task 完成: " << resultMessage;
+}
+
+void FfmpegTaskService::MergeTask(std::weak_ptr<FfmpegTaskProcDetail> item) {
+  auto detail = item.lock();
+  if (!detail) {
+    LOG_WARN << "FfmpegTaskService::MergeTask: 任务详情已过期";
+    return;
+  }
+
+  // 获取 MergerService
+  auto mergerService = drogon::app().getSharedPlugin<MergerService>();
+  if (!mergerService) {
+    LOG_ERROR << "FfmpegTaskService::MergeTask: 获取 MergerService 失败";
+    return;
+  }
+
+  // 获取任务信息
+  auto result = detail->getProcessResult();
+  const auto &inputFiles = result.files;
+  const auto &outputDirs = result.outputFiles;
+
+  if (inputFiles.empty()) {
+    LOG_WARN << "FfmpegTaskService::MergeTask: 无输入文件";
+    return;
+  }
+
+  if (outputDirs.empty()) {
+    LOG_ERROR << "FfmpegTaskService::MergeTask: 未指定输出目录";
+    return;
+  }
+
+  if (detail->isCancelled()) {
+    LOG_INFO << "FfmpegTaskService::MergeTask: 任务已取消";
+    return;
+  }
+
+  std::string outputDir = outputDirs[0];
+
+  // 创建进度回调
+  auto progressCallback = [item](const live2mp3::utils::FfmpegPipeInfo &info) {
+    if (auto detail = item.lock()) {
+      detail->setPipeInfo(info);
+    }
+  };
+
+  // 调用 MergerService 进行合并
+  auto outputPath =
+      mergerService->mergeVideoFiles(inputFiles, outputDir, progressCallback);
+  if (outputPath) {
+    LOG_INFO << "MergeTask: 合并成功 " << inputFiles.size() << " 个文件 -> "
+             << *outputPath;
+  } else {
+    LOG_ERROR << "MergeTask: 合并失败 " << inputFiles.size() << " 个文件";
+  }
+
+  LOG_DEBUG << "MergeTask 完成";
 }

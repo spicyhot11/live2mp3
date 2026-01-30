@@ -34,7 +34,7 @@ public:
   ScanResult scan();
 
 private:
-  ConfigService *configServicePtr = nullptr;
+  std::shared_ptr<ConfigService> configServicePtr;
 
   bool shouldInclude(const std::string &filepath,
                      const VideoRootConfig &rootConfig,

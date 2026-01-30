@@ -46,8 +46,8 @@ public:
 private:
   void runDiskScan();
 
-  ConfigService *lpConfigService_ = nullptr;
-  SchedulerService *lpSchedulerService_ = nullptr;
+  std::shared_ptr<ConfigService> lpConfigService_;
+  std::shared_ptr<SchedulerService> lpSchedulerService_;
 
   std::atomic<bool> isScanningDisk_{false};
   std::mutex diskStatsMutex_;

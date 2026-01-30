@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../utils/FfmpegUtils.h"
 #include "ConfigService.h"
 #include <chrono>
 #include <drogon/plugins/Plugin.h>
@@ -11,7 +12,7 @@
  * @brief 文件合并服务类
  *
  * 负责将多个视频文件合并为一个文件。通常用于将同一时间段内的多个片段
- * 合并为一个完整的录播文件。
+ * 合并为一个完整的录播文件。支持进度回调。
  */
 class MergerService : public drogon::Plugin<MergerService> {
 public:
@@ -26,14 +27,18 @@ public:
   /**
    * @brief 合并多个视频文件
    *
+   * 使用 FFmpeg concat 协议将多个视频文件合并为一个文件。
+   * 要求所有输入文件具有相同的编码格式。
+   *
    * @param files 待合并的文件路径列表
    * @param outputDir 输出目录
+   * @param progressCallback 可选的进度回调，实时报告合并进度
    * @return std::optional<std::string>
    * 成功返回合并后的文件路径，失败返回nullopt
    */
-  std::optional<std::string>
-  mergeVideoFiles(const std::vector<std::string> &files,
-                  const std::string &outputDir);
+  std::optional<std::string> mergeVideoFiles(
+      const std::vector<std::string> &files, const std::string &outputDir,
+      live2mp3::utils::FfmpegProgressCallback progressCallback = nullptr);
 
   /**
    * @brief 从文件名解析时间
@@ -47,8 +52,5 @@ public:
   parseTime(const std::string &filename);
 
 private:
-  ConfigService *configServicePtr = nullptr;
-
-  bool runFfmpegConcat(const std::string &listPath,
-                       const std::string &outputPath);
+  std::shared_ptr<ConfigService> configServicePtr;
 };

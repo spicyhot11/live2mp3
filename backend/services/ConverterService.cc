@@ -1,12 +1,10 @@
 #include "ConverterService.h"
-#include <array>
-#include <cstdio>
+#include "../utils/FfmpegUtils.h"
+#include "../utils/FileUtils.h"
+#include "PendingFileService.h"
 #include <drogon/drogon.h>
 #include <filesystem>
 #include <fmt/core.h>
-
-#include "../utils/FileUtils.h"
-#include "PendingFileService.h"
 #include <regex>
 
 namespace fs = std::filesystem;
@@ -86,7 +84,7 @@ ConverterService::convertToMp3(const std::string &inputPath) {
 
   LOG_INFO << "Starting conversion: " << cmd;
 
-  if (runFfmpeg(cmd)) {
+  if (live2mp3::utils::runFfmpegWithProgress(cmd)) {
     LOG_INFO << "Conversion successful: " << outputPath;
 
     // Handle source file deletion based on per-root settings
@@ -203,36 +201,12 @@ ConverterService::determineOutputPathWithExt(const std::string &inputPath,
   return (fs::path(outputRoot) / parentDir / filename).string();
 }
 
-bool ConverterService::runFfmpeg(const std::string &cmd) {
-  std::array<char, 128> buffer;
-  std::string result;
-  FILE *pipe = popen(cmd.c_str(), "r");
-
-  if (!pipe) {
-    LOG_ERROR << "popen() failed!";
-    return false;
-  }
-
-  while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
-    // result += buffer.data();
-  }
-
-  int returnCode = pclose(pipe);
-
-  if (returnCode != 0) {
-    LOG_ERROR << "FFmpeg error output:\n" << result;
-    return false;
-  }
-
-  return true;
-}
-
-std::optional<std::string>
-ConverterService::convertToAv1Mp4(const std::string &inputPath,
-                                  const std::string &outputDir) {
+std::optional<std::string> ConverterService::convertToAv1Mp4(
+    const std::string &inputPath, const std::string &outputDir,
+    live2mp3::utils::FfmpegProgressCallback progressCallback) {
   auto config = configServicePtr->getConfig();
 
-  // Determine output directory
+  // 确定输出目录
   std::string targetDir = outputDir;
   if (targetDir.empty()) {
     targetDir = config.temp.temp_dir.empty() ? config.output.output_root
@@ -242,28 +216,28 @@ ConverterService::convertToAv1Mp4(const std::string &inputPath,
   std::string outputPath =
       determineOutputPathWithExt(inputPath, targetDir, ".mp4");
 
-  // Ensure output directory exists
+  // 确保输出目录存在
   try {
     fs::create_directories(fs::path(outputPath).parent_path());
   } catch (const fs::filesystem_error &e) {
-    LOG_ERROR << "Failed to create output directory: " << e.what();
+    LOG_ERROR << "创建输出目录失败: " << e.what();
     return std::nullopt;
   }
 
-  // FFmpeg command for AV1 encoding with SVT-AV1
-  // Using CRF 30 for reasonable quality/size balance
+  // FFmpeg 命令：使用 SVT-AV1 编码器进行 AV1 转码
+  // CRF 30 提供较好的质量/大小平衡
   std::string cmd = fmt::format("ffmpeg -y -i \"{}\" -c:v libsvtav1 -crf 30 "
                                 "-preset 6 -c:a aac -b:a 128k \"{}\" 2>&1",
                                 inputPath, outputPath);
 
-  LOG_INFO << "Starting AV1 conversion: " << inputPath << " -> " << outputPath;
+  LOG_INFO << "开始 AV1 转换: " << inputPath << " -> " << outputPath;
 
-  if (runFfmpeg(cmd)) {
-    LOG_INFO << "AV1 conversion successful: " << outputPath;
+  if (live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback)) {
+    LOG_INFO << "AV1 转换成功: " << outputPath;
     return outputPath;
   } else {
-    LOG_ERROR << "AV1 conversion failed for " << inputPath;
-    // Cleanup failed output if exists
+    LOG_ERROR << "AV1 转换失败: " << inputPath;
+    // 清理失败的输出文件
     if (fs::exists(outputPath)) {
       fs::remove(outputPath);
     }
@@ -271,9 +245,9 @@ ConverterService::convertToAv1Mp4(const std::string &inputPath,
   }
 }
 
-std::optional<std::string>
-ConverterService::extractMp3FromVideo(const std::string &videoPath,
-                                      const std::string &outputDir) {
+std::optional<std::string> ConverterService::extractMp3FromVideo(
+    const std::string &videoPath, const std::string &outputDir,
+    live2mp3::utils::FfmpegProgressCallback progressCallback) {
   auto config = configServicePtr->getConfig();
 
   std::string targetDir =
@@ -282,25 +256,26 @@ ConverterService::extractMp3FromVideo(const std::string &videoPath,
   std::string outputPath =
       determineOutputPathWithExt(videoPath, targetDir, ".mp3");
 
-  // Ensure output directory exists
+  // 确保输出目录存在
   try {
     fs::create_directories(fs::path(outputPath).parent_path());
   } catch (const fs::filesystem_error &e) {
-    LOG_ERROR << "Failed to create output directory: " << e.what();
+    LOG_ERROR << "创建输出目录失败: " << e.what();
     return std::nullopt;
   }
 
+  // FFmpeg 命令：提取音频并转为 MP3
   std::string cmd = fmt::format(
       "ffmpeg -y -i \"{}\" -vn -acodec libmp3lame -q:a 2 \"{}\" 2>&1",
       videoPath, outputPath);
 
-  LOG_INFO << "Extracting MP3 from: " << videoPath;
+  LOG_INFO << "开始提取 MP3: " << videoPath;
 
-  if (runFfmpeg(cmd)) {
-    LOG_INFO << "MP3 extraction successful: " << outputPath;
+  if (live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback)) {
+    LOG_INFO << "MP3 提取成功: " << outputPath;
     return outputPath;
   } else {
-    LOG_ERROR << "MP3 extraction failed for " << videoPath;
+    LOG_ERROR << "MP3 提取失败: " << videoPath;
     if (fs::exists(outputPath)) {
       fs::remove(outputPath);
     }
@@ -352,13 +327,13 @@ void ConverterService::initAndStart(const Json::Value &config) {
     return;
   }
 
-  configServicePtr = drogon::app().getPlugin<ConfigService>();
+  configServicePtr = drogon::app().getSharedPlugin<ConfigService>();
   if (!configServicePtr) {
     LOG_FATAL << "ConfigService not found";
     return;
   }
 
-  pendingFileServicePtr = drogon::app().getPlugin<PendingFileService>();
+  pendingFileServicePtr = drogon::app().getSharedPlugin<PendingFileService>();
   if (!pendingFileServicePtr) {
     LOG_FATAL << "PendingFileService not found";
     return;

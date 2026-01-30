@@ -2,16 +2,14 @@
 
 HistoryController::HistoryController() {
   LOG_INFO << "HistoryController initialized";
-  lpConfigService_ = drogon::app().getPlugin<ConfigService>();
-
-  if (lpConfigService_ == nullptr) {
+  lpConfigService_ = drogon::app().getSharedPlugin<ConfigService>();
+  if (!lpConfigService_) {
     LOG_FATAL << "ConfigService not found";
     return;
   }
 
-  lpPendingFileService_ = drogon::app().getPlugin<PendingFileService>();
-
-  if (lpPendingFileService_ == nullptr) {
+  lpPendingFileService_ = drogon::app().getSharedPlugin<PendingFileService>();
+  if (!lpPendingFileService_) {
     LOG_FATAL << "PendingFileService not found";
     return;
   }

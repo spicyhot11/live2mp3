@@ -12,31 +12,31 @@
 namespace fs = std::filesystem;
 
 void SchedulerService::initAndStart(const Json::Value &config) {
-  configServicePtr = drogon::app().getPlugin<ConfigService>();
+  configServicePtr = drogon::app().getSharedPlugin<ConfigService>();
   if (!configServicePtr) {
     LOG_FATAL << "Failed to get ConfigService plugin";
     return;
   }
 
-  mergerServicePtr = drogon::app().getPlugin<MergerService>();
+  mergerServicePtr = drogon::app().getSharedPlugin<MergerService>();
   if (!mergerServicePtr) {
     LOG_FATAL << "Failed to get MergerService plugin";
     return;
   }
 
-  scannerServicePtr = drogon::app().getPlugin<ScannerService>();
+  scannerServicePtr = drogon::app().getSharedPlugin<ScannerService>();
   if (!scannerServicePtr) {
     LOG_FATAL << "Failed to get ScannerService plugin";
     return;
   }
 
-  converterServicePtr = drogon::app().getPlugin<ConverterService>();
+  converterServicePtr = drogon::app().getSharedPlugin<ConverterService>();
   if (!converterServicePtr) {
     LOG_FATAL << "Failed to get ConverterService plugin";
     return;
   }
 
-  pendingFileServicePtr = drogon::app().getPlugin<PendingFileService>();
+  pendingFileServicePtr = drogon::app().getSharedPlugin<PendingFileService>();
   if (!pendingFileServicePtr) {
     LOG_FATAL << "Failed to get PendingFileService plugin";
     return;
@@ -44,11 +44,11 @@ void SchedulerService::initAndStart(const Json::Value &config) {
 }
 
 void SchedulerService::shutdown() {
-  configServicePtr = nullptr;
-  mergerServicePtr = nullptr;
-  scannerServicePtr = nullptr;
-  converterServicePtr = nullptr;
-  pendingFileServicePtr = nullptr;
+  configServicePtr.reset();
+  mergerServicePtr.reset();
+  scannerServicePtr.reset();
+  converterServicePtr.reset();
+  pendingFileServicePtr.reset();
 }
 
 std::string SchedulerService::getCurrentFile() {

@@ -65,11 +65,11 @@ private:
 
   void setPhase(const std::string &phase);
 
-  ConfigService *configServicePtr = nullptr;
-  MergerService *mergerServicePtr = nullptr;
-  ScannerService *scannerServicePtr = nullptr;
-  ConverterService *converterServicePtr = nullptr;
-  PendingFileService *pendingFileServicePtr = nullptr;
+  std::shared_ptr<ConfigService> configServicePtr;
+  std::shared_ptr<MergerService> mergerServicePtr;
+  std::shared_ptr<ScannerService> scannerServicePtr;
+  std::shared_ptr<ConverterService> converterServicePtr;
+  std::shared_ptr<PendingFileService> pendingFileServicePtr;
 
   std::atomic<bool> running_{false};
   std::string currentFile_;

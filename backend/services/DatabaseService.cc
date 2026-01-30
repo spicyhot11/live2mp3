@@ -1,7 +1,7 @@
 #include "DatabaseService.h"
 
 DatabaseService &DatabaseService::getInstance() {
-  auto *instance = drogon::app().getPlugin<DatabaseService>();
+  auto instance = drogon::app().getSharedPlugin<DatabaseService>();
   if (instance) {
     return *instance;
   }

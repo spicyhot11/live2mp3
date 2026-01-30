@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../utils/FfmpegUtils.h"
 #include "ConfigService.h"
 #include "services/PendingFileService.h"
 #include <drogon/plugins/Plugin.h>
@@ -10,7 +11,7 @@
  * @brief 媒体转换服务类
  *
  * 负责音频和视频文件的转换操作，包括视频转AV1格式MP4、从视频提取MP3等。
- * 主要对FFmpeg命令进行封装。
+ * 主要对 FFmpeg 命令进行封装，支持进度回调。
  */
 class ConverterService : public drogon::Plugin<ConverterService> {
 public:
@@ -37,24 +38,27 @@ public:
    *
    * @param inputPath 输入视频路径
    * @param outputDir 输出目录，留空则使用配置的临时目录或输出根目录
+   * @param progressCallback 可选的进度回调，实时报告转换进度
    * @return std::optional<std::string>
    * 转换成功返回输出文件路径，失败返回nullopt
    */
-  std::optional<std::string> convertToAv1Mp4(const std::string &inputPath,
-                                             const std::string &outputDir = "");
+  std::optional<std::string> convertToAv1Mp4(
+      const std::string &inputPath, const std::string &outputDir = "",
+      live2mp3::utils::FfmpegProgressCallback progressCallback = nullptr);
 
   /**
    * @brief 从视频文件中提取MP3
    *
-   * 通常在合并操作完成后调用。
+   * 通常在合并操作完成后调用，用于生成纯音频文件。
    *
    * @param videoPath 视频文件路径
-   * @param outputDir 输出目录
+   * @param outputDir 输出目录，留空则使用配置的输出根目录
+   * @param progressCallback 可选的进度回调，实时报告转换进度
    * @return std::optional<std::string> 成功返回MP3文件路径，失败返回nullopt
    */
-  std::optional<std::string>
-  extractMp3FromVideo(const std::string &videoPath,
-                      const std::string &outputDir = "");
+  std::optional<std::string> extractMp3FromVideo(
+      const std::string &videoPath, const std::string &outputDir = "",
+      live2mp3::utils::FfmpegProgressCallback progressCallback = nullptr);
 
   /**
    * @brief 获取临时目录使用量(字节)
@@ -73,13 +77,28 @@ public:
   bool hasTempSpace(uint64_t requiredBytes);
 
 private:
-  ConfigService *configServicePtr = nullptr;
-  PendingFileService *pendingFileServicePtr = nullptr;
+  std::shared_ptr<ConfigService> configServicePtr;
+  std::shared_ptr<PendingFileService> pendingFileServicePtr;
 
+  /**
+   * @brief 根据输入路径生成输出路径
+   *
+   * @param inputPath 输入文件路径
+   * @param outputRoot 输出根目录
+   * @return std::string 生成的输出路径
+   */
   std::string determineOutputPath(const std::string &inputPath,
                                   const std::string &outputRoot);
+
+  /**
+   * @brief 根据输入路径和扩展名生成输出路径
+   *
+   * @param inputPath 输入文件路径
+   * @param outputRoot 输出根目录
+   * @param ext 输出文件扩展名（如 ".mp3", ".mp4"）
+   * @return std::string 生成的输出路径
+   */
   std::string determineOutputPathWithExt(const std::string &inputPath,
                                          const std::string &outputRoot,
                                          const std::string &ext);
-  bool runFfmpeg(const std::string &cmd);
 };

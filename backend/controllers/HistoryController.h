@@ -44,6 +44,6 @@ public:
                     int id);
 
 private:
-  ConfigService *lpConfigService_ = nullptr;
-  PendingFileService *lpPendingFileService_ = nullptr;
+  std::shared_ptr<ConfigService> lpConfigService_;
+  std::shared_ptr<PendingFileService> lpPendingFileService_;
 };

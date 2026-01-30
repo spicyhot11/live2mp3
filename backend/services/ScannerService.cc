@@ -51,14 +51,14 @@ static bool checkRule(const std::string &subDirName, const FilterRule &rule) {
 }
 
 void ScannerService::initAndStart(const Json::Value &config) {
-  configServicePtr = drogon::app().getPlugin<ConfigService>();
+  configServicePtr = drogon::app().getSharedPlugin<ConfigService>();
   if (!configServicePtr) {
     LOG_FATAL << "Failed to get ConfigService plugin";
     return;
   }
 }
 
-void ScannerService::shutdown() { configServicePtr = nullptr; }
+void ScannerService::shutdown() { configServicePtr.reset(); }
 
 ScannerService::ScanResult ScannerService::scan() {
   ScanResult result;

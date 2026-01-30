@@ -47,8 +47,8 @@ public:
                    std::function<void(const HttpResponsePtr &)> &&callback);
 
 private:
-  ConfigService *lpConfigService_ = nullptr;
-  PendingFileService *lpPendingFileService_ = nullptr;
-  ScannerService *lpScannerService_ = nullptr;
-  SchedulerService *lpSchedulerService_ = nullptr;
+  std::shared_ptr<ConfigService> lpConfigService_;
+  std::shared_ptr<PendingFileService> lpPendingFileService_;
+  std::shared_ptr<ScannerService> lpScannerService_;
+  std::shared_ptr<SchedulerService> lpSchedulerService_;
 };
