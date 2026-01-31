@@ -137,6 +137,12 @@ drogon::Task<FfmpegTaskResult> FfmpegTaskProcDetail::execute() {
   co_return getProcessResult();
 }
 
+void FfmpegTaskProcDetail::setOutputFiles(
+    const std::vector<std::string> &outputFiles) {
+  std::lock_guard<std::mutex> lock(mutexStatic_);
+  this->outputFiles = outputFiles;
+}
+
 void FfmpegTaskProcDetail::setInfo(const FfmpegTaskInput &input) {
   std::lock_guard<std::mutex> lock(mutexStatic_);
   type = input.type;
@@ -178,7 +184,7 @@ void FfAsyncChannel::close() {
   // 可能需要取消等待中的任务
 }
 
-drogon::Task<std::optional<std::string>>
+drogon::Task<std::optional<FfmpegTaskResult>>
 FfAsyncChannel::send(FfmpegTaskInput item) {
   // 1. 获取信号量许可
   bool acquired = co_await semaphore_.acquire();
@@ -224,6 +230,9 @@ FfAsyncChannel::send(FfmpegTaskInput item) {
   // 5. 任务完成，释放信号量
   semaphore_.release();
 
+  // 获取执行结果
+  FfmpegTaskResult result = taskProcDetail->getProcessResult();
+
   // 6. 从任务映射表中移除
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -231,7 +240,7 @@ FfAsyncChannel::send(FfmpegTaskInput item) {
   }
 
   LOG_DEBUG << "FfmpegTaskService: task completed, id: " << taskId;
-  co_return taskId; // 返回成功的optional
+  co_return result; // 返回成功的结果
 }
 
 void FfAsyncChannel::sendAsync(
@@ -245,7 +254,11 @@ void FfAsyncChannel::sendAsync(
 
         // 如果提供了回调函数，则调用它
         if (callback) {
-          callback(result);
+          if (result.has_value()) {
+            callback(result->id);
+          } else {
+            callback(std::nullopt);
+          }
         }
       });
 }
@@ -269,9 +282,14 @@ void FfmpegTaskService::initAndStart(const Json::Value &config) {
     maxWaiting = config["maxWaitingTasks"].asUInt();
   }
 
-  // 获取CommonThreadService的线程数
-  auto threadService = drogon::app().getSharedPlugin<CommonThreadService>();
-  size_t threadCount = threadService->getThreadCount();
+  // 获取 CommonThreadService
+  threadServicePtr_ = drogon::app().getSharedPlugin<CommonThreadService>();
+  if (!threadServicePtr_) {
+    LOG_FATAL << "FfmpegTaskService: CommonThreadService not found";
+    return;
+  }
+
+  size_t threadCount = threadServicePtr_->getThreadCount();
 
   // 验证：容量不超过线程数
   if (maxConcurrent > threadCount) {
@@ -281,12 +299,23 @@ void FfmpegTaskService::initAndStart(const Json::Value &config) {
     maxConcurrent = threadCount;
   }
 
+  // 创建任务通道
+  channel_ = std::make_unique<FfAsyncChannel>(maxConcurrent, maxWaiting,
+                                              threadServicePtr_);
+
   LOG_INFO << "FfmpegTaskService initialized: "
            << "maxConcurrent=" << maxConcurrent << ", maxWaiting=" << maxWaiting
            << ", threadPoolSize=" << threadCount;
 }
 
-void FfmpegTaskService::shutdown() { LOG_INFO << "FfmpegTaskService shutdown"; }
+void FfmpegTaskService::shutdown() {
+  LOG_INFO << "FfmpegTaskService shutdown";
+  if (channel_) {
+    channel_->close();
+    channel_.reset();
+  }
+  threadServicePtr_.reset();
+}
 
 void FfmpegTaskService::ConvertMp4Task(
     std::weak_ptr<FfmpegTaskProcDetail> item) {
@@ -343,6 +372,7 @@ void FfmpegTaskService::ConvertMp4Task(
                                                         progressCallback);
     if (outputPath) {
       successCount++;
+      detail->setOutputFiles({*outputPath});
       LOG_INFO << "ConvertMp4Task: 转换成功 " << inputPath << " -> "
                << *outputPath;
     } else {
@@ -414,6 +444,7 @@ void FfmpegTaskService::ConvertMp3Task(
         inputPath, outputDir, progressCallback);
     if (outputPath) {
       successCount++;
+      detail->setOutputFiles({*outputPath});
       LOG_INFO << "ConvertMp3Task: 提取成功 " << inputPath << " -> "
                << *outputPath;
     } else {
@@ -477,6 +508,7 @@ void FfmpegTaskService::MergeTask(std::weak_ptr<FfmpegTaskProcDetail> item) {
   auto outputPath =
       mergerService->mergeVideoFiles(inputFiles, outputDir, progressCallback);
   if (outputPath) {
+    detail->setOutputFiles({*outputPath});
     LOG_INFO << "MergeTask: 合并成功 " << inputFiles.size() << " 个文件 -> "
              << *outputPath;
   } else {
@@ -484,4 +516,102 @@ void FfmpegTaskService::MergeTask(std::weak_ptr<FfmpegTaskProcDetail> item) {
   }
 
   LOG_DEBUG << "MergeTask 完成";
+}
+
+// ============================================================
+// FfmpegTaskService 新增接口实现
+// ============================================================
+
+std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)>
+FfmpegTaskService::getTaskFunc(FfmpegTaskType type) {
+  switch (type) {
+  case FfmpegTaskType::CONVERT_MP4:
+    return ConvertMp4Task;
+  case FfmpegTaskType::CONVERT_MP3:
+    return ConvertMp3Task;
+  case FfmpegTaskType::MERGE:
+    return MergeTask;
+  case FfmpegTaskType::OTHER:
+  default:
+    return nullptr;
+  }
+}
+
+drogon::Task<std::optional<FfmpegTaskResult>> FfmpegTaskService::submitTask(
+    FfmpegTaskType type, const std::vector<std::string> &files,
+    const std::vector<std::string> &outputFiles,
+    std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> callback,
+    std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> customFunc) {
+
+  if (!channel_) {
+    LOG_ERROR << "FfmpegTaskService::submitTask: channel_ 未初始化";
+    co_return std::nullopt;
+  }
+
+  // 根据类型获取处理函数
+  auto taskFunc = getTaskFunc(type);
+  if (!taskFunc) {
+    // 如果不是内置类型，使用自定义函数
+    if (customFunc) {
+      taskFunc = customFunc;
+    } else {
+      LOG_ERROR
+          << "FfmpegTaskService::submitTask: 未知任务类型且未提供自定义函数";
+      co_return std::nullopt;
+    }
+  }
+
+  // 构造任务输入
+  FfmpegTaskInput input;
+  input.type = type;
+  input.files = files;
+  input.outputFiles = outputFiles;
+  input.func = taskFunc;
+  input.callback = callback;
+
+  // 通过 channel 发送任务并等待完成
+  auto result = co_await channel_->send(std::move(input));
+  co_return result;
+}
+
+void FfmpegTaskService::submitTaskAsync(
+    FfmpegTaskType type, const std::vector<std::string> &files,
+    const std::vector<std::string> &outputFiles,
+    std::function<void(std::optional<std::string>)> resultCallback,
+    std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> callback,
+    std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> customFunc) {
+
+  if (!channel_) {
+    LOG_ERROR << "FfmpegTaskService::submitTaskAsync: channel_ 未初始化";
+    if (resultCallback) {
+      resultCallback(std::nullopt);
+    }
+    return;
+  }
+
+  // 根据类型获取处理函数
+  auto taskFunc = getTaskFunc(type);
+  if (!taskFunc) {
+    if (customFunc) {
+      taskFunc = customFunc;
+    } else {
+      LOG_ERROR << "FfmpegTaskService::submitTaskAsync: "
+                   "未知任务类型且未提供自定义函数";
+      if (resultCallback) {
+        resultCallback(std::nullopt);
+      }
+      return;
+    }
+  }
+
+  // 构造任务输入
+  FfmpegTaskInput input;
+  input.type = type;
+  input.files = files;
+  input.outputFiles = outputFiles;
+  input.func = taskFunc;
+  input.callback = callback;
+
+  // 通过 channel 异步发送任务
+  channel_->sendAsync(std::move(input), resultCallback);
 }

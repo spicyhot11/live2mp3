@@ -1,12 +1,15 @@
 #pragma once
 
+#include "CommonThreadService.h"
 #include "ConfigService.h"
 #include "ConverterService.h"
+#include "FfmpegTaskService.h"
 #include "MergerService.h"
 #include "PendingFileService.h"
 #include "ScannerService.h"
 #include <atomic>
 #include <drogon/plugins/Plugin.h>
+#include <drogon/utils/coroutine.h>
 #include <mutex>
 #include <string>
 
@@ -15,6 +18,7 @@
  *
  * 协调其他服务（扫描、转换、合并）的工作流程。
  * 周期性执行任务，维护整个文件处理的生命周期。
+ * 使用协程进行异步调度，通过 FfmpegTaskService 发送任务。
  */
 class SchedulerService : public drogon::Plugin<SchedulerService> {
 public:
@@ -42,16 +46,29 @@ public:
   nlohmann::json getDetailedStatus();
 
 private:
-  void runTask(bool immediate = false);
+  /**
+   * @brief 主任务协程
+   * 编排所有阶段的执行
+   */
+  drogon::Task<void> runTaskAsync(bool immediate = false);
 
-  // 阶段 1: 扫描文件并更新 pending_files 中的 MD5
+  /**
+   * @brief 阶段 1: 扫描文件并更新 pending_files 中的 MD5
+   * 这是 CPU 密集型操作，在线程池中执行
+   */
   void runStabilityScan();
 
-  // 阶段 2: 将稳定状态的文件转换为 AV1 MP4
-  void runConversion();
+  /**
+   * @brief 阶段 2: 将稳定状态的文件转换为 AV1 MP4
+   * 通过 FfmpegTaskService 发送转换任务
+   */
+  drogon::Task<void> runConversionAsync();
 
-  // 阶段 3: 处理已暂存的文件 (合并并移动到输出目录)
-  void runMergeAndOutput(bool immediate = false);
+  /**
+   * @brief 阶段 3: 处理已暂存的文件 (合并并移动到输出目录)
+   * 通过 FfmpegTaskService 发送合并任务
+   */
+  drogon::Task<void> runMergeAndOutputAsync(bool immediate = false);
 
   // 分组辅助结构
   struct StagedFile {
@@ -59,17 +76,23 @@ private:
     std::chrono::system_clock::time_point time;
   };
 
-  // 处理确认的一批文件
-  void processBatch(const std::vector<StagedFile> &batch,
-                    const AppConfig &config);
+  /**
+   * @brief 处理确认的一批文件
+   * 通过 FfmpegTaskService 发送合并和MP3提取任务
+   */
+  drogon::Task<void> processBatchAsync(const std::vector<StagedFile> &batch,
+                                       const AppConfig &config);
 
   void setPhase(const std::string &phase);
 
-  std::shared_ptr<ConfigService> configServicePtr;
-  std::shared_ptr<MergerService> mergerServicePtr;
-  std::shared_ptr<ScannerService> scannerServicePtr;
-  std::shared_ptr<ConverterService> converterServicePtr;
-  std::shared_ptr<PendingFileService> pendingFileServicePtr;
+  // 服务指针
+  std::shared_ptr<ConfigService> configServicePtr_;
+  std::shared_ptr<MergerService> mergerServicePtr_;
+  std::shared_ptr<ScannerService> scannerServicePtr_;
+  std::shared_ptr<ConverterService> converterServicePtr_;
+  std::shared_ptr<PendingFileService> pendingFileServicePtr_;
+  std::shared_ptr<FfmpegTaskService> ffmpegTaskServicePtr_;
+  std::shared_ptr<CommonThreadService> commonThreadServicePtr_;
 
   std::atomic<bool> running_{false};
   std::string currentFile_;

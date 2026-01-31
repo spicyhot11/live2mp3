@@ -68,10 +68,11 @@ std::optional<std::string> MergerService::mergeVideoFiles(
     return files[0];
   }
 
-  // 使用第一个文件的文件名作为基础，添加 "merged_" 前缀
+  // 使用第一个文件的文件名作为基础，添加 "_merged" 后缀
   fs::path firstPath(files[0]);
-  std::string filename = firstPath.filename().string();
-  std::string outputName = "merged_" + filename;
+  std::string stem = firstPath.stem().string();
+  std::string extension = firstPath.extension().string();
+  std::string outputName = stem + "_merged" + extension;
   std::string outputPath = (fs::path(outputDir) / outputName).string();
 
   // 创建 concat 列表文件

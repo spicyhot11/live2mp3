@@ -144,6 +144,11 @@ public:
   void setInfo(const FfmpegTaskInput &input);
 
   /**
+   * @brief 设置输出文件列表
+   */
+  void setOutputFiles(const std::vector<std::string> &outputFiles);
+
+  /**
    * @brief 获取任务ID
    */
   std::string getId();
@@ -207,10 +212,10 @@ public:
   /**
    * @brief 发送一个元素到通道 (协程版本，等待任务完成)
    * @param item 任务输入
-   * @return drogon::Task<std::optional<std::string>> 成功返回任务ID，失败返回
-   * nullopt
+   * @return drogon::Task<std::optional<FfmpegTaskResult>>
+   * 成功返回任务结果，失败返回 nullopt
    */
-  drogon::Task<std::optional<std::string>> send(FfmpegTaskInput item);
+  drogon::Task<std::optional<FfmpegTaskResult>> send(FfmpegTaskInput item);
 
   /**
    * @brief 发送一个元素到通道 (非等待版本，发射后不管)
@@ -302,11 +307,69 @@ public:
    */
   void shutdown() override;
 
+  /**
+   * @brief 提交任务的统一接口
+   *
+   * 根据任务类型自动选择处理函数：
+   * - CONVERT_MP4 → ConvertMp4Task
+   * - CONVERT_MP3 → ConvertMp3Task
+   * - MERGE → MergeTask
+   * - OTHER → 需要通过 customFunc 参数传入
+   *
+   * @param type 任务类型
+   * @param files 输入文件列表
+   * @param outputFiles 输出目录/文件列表
+   * @param callback 可选的完成回调
+   * @param customFunc 仅当 type 为 OTHER 时使用的自定义处理函数
+   * @return drogon::Task<std::optional<FfmpegTaskResult>>
+   * 成功返回任务结果，失败返回 nullopt
+   */
+  drogon::Task<std::optional<FfmpegTaskResult>> submitTask(
+      FfmpegTaskType type, const std::vector<std::string> &files,
+      const std::vector<std::string> &outputFiles,
+      std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> callback =
+          nullptr,
+      std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> customFunc =
+          nullptr);
+
+  /**
+   * @brief 提交任务（非等待版本，发射后不管）
+   *
+   * @param type 任务类型
+   * @param files 输入文件列表
+   * @param outputFiles 输出目录/文件列表
+   * @param resultCallback 可选的结果回调，传入任务ID或nullopt
+   * @param callback 可选的完成回调
+   * @param customFunc 仅当 type 为 OTHER 时使用的自定义处理函数
+   */
+  void submitTaskAsync(
+      FfmpegTaskType type, const std::vector<std::string> &files,
+      const std::vector<std::string> &outputFiles,
+      std::function<void(std::optional<std::string>)> resultCallback = nullptr,
+      std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> callback =
+          nullptr,
+      std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> customFunc =
+          nullptr);
+
+  // 任务处理静态函数
   static void ConvertMp4Task(std::weak_ptr<FfmpegTaskProcDetail> item);
-
   static void ConvertMp3Task(std::weak_ptr<FfmpegTaskProcDetail> item);
-
   static void MergeTask(std::weak_ptr<FfmpegTaskProcDetail> item);
 
 private:
+  /**
+   * @brief 根据任务类型获取对应的处理函数
+   */
+  static std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)>
+  getTaskFunc(FfmpegTaskType type);
+
+  /**
+   * @brief 任务通道
+   */
+  std::unique_ptr<FfAsyncChannel> channel_;
+
+  /**
+   * @brief 线程池服务
+   */
+  std::shared_ptr<CommonThreadService> threadServicePtr_;
 };
