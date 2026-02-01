@@ -72,8 +72,8 @@
         {
             "name": "FfmpegTaskService",
             "config": {
-                "maxConcurrentTasks": 8,
-                "maxWaitingTasks": 100,
+                "maxConcurrentTasks": 2,
+                "maxWaitingTasks": 10000,
                 "taskTimeoutSeconds": 600
             },
             "dependencies": [

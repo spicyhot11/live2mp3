@@ -1,5 +1,5 @@
 #include "SchedulerService.h"
-#include "../utils/CoroUtils.hpp"
+#include "../utils/CoroUtils.h"
 #include "../utils/FileUtils.h"
 #include <algorithm>
 #include <drogon/drogon.h>
@@ -499,40 +499,103 @@ SchedulerService::encodeFilesToTmpAsync(const std::vector<std::string> &files,
   result.successCount = 0;
   result.failCount = 0;
 
+  if (files.empty()) {
+    co_return result;
+  }
+
+  // 使用共享结果收集器，按完成顺序收集结果
+  struct ResultCollector {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::queue<ConvertResult> results;
+    size_t completedCount = 0;
+    size_t totalCount = 0;
+  };
+
+  auto collector = std::make_shared<ResultCollector>();
+  collector->totalCount = files.size();
+
+  // 并发启动所有编码任务
   for (const auto &inputPath : files) {
-    ConvertResult convertResult;
-    convertResult.originalPath = inputPath;
-    convertResult.success = false;
-    convertResult.retryCount = 0;
+    // 使用 async_run 并发启动每个编码任务
+    drogon::async_run([this, inputPath, tmpDir, maxRetries,
+                       collector]() -> drogon::Task<void> {
+      ConvertResult convertResult;
+      convertResult.originalPath = inputPath;
+      convertResult.success = false;
+      convertResult.retryCount = 0;
 
-    for (int attempt = 1; attempt <= maxRetries; ++attempt) {
-      convertResult.retryCount = attempt;
-      LOG_INFO << "编码文件 (尝试 " << attempt << "/" << maxRetries
-               << "): " << inputPath;
-
-      auto encodeTaskResult = co_await ffmpegTaskServicePtr_->submitTask(
-          FfmpegTaskType::CONVERT_MP4, {inputPath}, {tmpDir});
-
-      if (encodeTaskResult.has_value() &&
-          !encodeTaskResult->outputFiles.empty()) {
-        convertResult.success = true;
-        convertResult.convertedPath = encodeTaskResult->outputFiles[0];
-        LOG_INFO << "编码成功: " << inputPath << " -> "
-                 << convertResult.convertedPath;
-        break;
-      } else {
-        LOG_WARN << "编码失败 (尝试 " << attempt << "/" << maxRetries
+      for (int attempt = 1; attempt <= maxRetries; ++attempt) {
+        convertResult.retryCount = attempt;
+        LOG_INFO << "编码文件 (尝试 " << attempt << "/" << maxRetries
                  << "): " << inputPath;
-      }
-    }
 
+        auto encodeTaskResult = co_await ffmpegTaskServicePtr_->submitTask(
+            FfmpegTaskType::CONVERT_MP4, {inputPath}, {tmpDir});
+
+        if (encodeTaskResult.has_value() &&
+            !encodeTaskResult->outputFiles.empty()) {
+          convertResult.success = true;
+          convertResult.convertedPath = encodeTaskResult->outputFiles[0];
+          LOG_INFO << "编码成功: " << inputPath << " -> "
+                   << convertResult.convertedPath;
+          break;
+        } else {
+          LOG_WARN << "编码失败 (尝试 " << attempt << "/" << maxRetries
+                   << "): " << inputPath;
+        }
+      }
+
+      // 任务完成，推送结果到队列
+      {
+        std::lock_guard<std::mutex> lock(collector->mutex);
+        collector->results.push(std::move(convertResult));
+        collector->completedCount++;
+      }
+      collector->cv.notify_one();
+    });
+  }
+
+  // 按完成顺序收集结果（使用 awaitCallback 等待 cv 通知）
+  size_t collected = 0;
+  const size_t totalFiles = files.size();
+
+  while (collected < totalFiles) {
+    // 使用 awaitCallback 非阻塞等待条件变量通知
+    ConvertResult convertResult =
+        co_await live2mp3::utils::awaitCallback<ConvertResult>(
+            [collector](std::function<void(ConvertResult)> callback) {
+              std::unique_lock<std::mutex> lock(collector->mutex);
+              // 如果队列中已有结果，直接取出
+              if (!collector->results.empty()) {
+                auto res = std::move(collector->results.front());
+                collector->results.pop();
+                lock.unlock();
+                callback(std::move(res));
+                return;
+              }
+              // 否则在后台线程等待
+              std::thread([collector,
+                           callback = std::move(callback)]() mutable {
+                std::unique_lock<std::mutex> lock(collector->mutex);
+                collector->cv.wait(lock,
+                                   [&] { return !collector->results.empty(); });
+                auto res = std::move(collector->results.front());
+                collector->results.pop();
+                lock.unlock();
+                callback(std::move(res));
+              }).detach();
+            });
+
+    collected++;
     result.results.push_back(convertResult);
     if (convertResult.success) {
       result.successCount++;
       result.successPaths.push_back(convertResult.convertedPath);
     } else {
       result.failCount++;
-      LOG_ERROR << "文件编码失败（已达最大重试次数）: " << inputPath;
+      LOG_ERROR << "文件编码失败（已达最大重试次数）: "
+                << convertResult.originalPath;
     }
   }
 
