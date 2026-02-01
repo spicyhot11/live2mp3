@@ -86,6 +86,12 @@ struct FfmpegTaskProcess : public FfmpegTaskBase {
   long long createTime;      ///< 创建时间戳
   long long startTime;       ///< 开始时间戳
   long long endTime;         ///< 结束时间戳
+
+  // 进度信息
+  int progressTime;    ///< 已处理时长（毫秒）
+  int progressFps;     ///< 当前处理帧率
+  int progressBitrate; ///< 当前处理码率 (kbits/s)
+  double speed;        ///< 处理速度倍率（相对于实时）
 };
 
 /**
@@ -234,6 +240,12 @@ public:
   void close();
 
   /**
+   * @brief 获取当前正在运行的任务列表
+   * @return 任务进度信息列表
+   */
+  std::vector<FfmpegTaskProcess> getRunningTasks();
+
+  /**
    * @brief 构造函数
    * @param capacity 最大并发任务数
    * @param maxWaiting 最大等待队列长度
@@ -355,6 +367,12 @@ public:
   static void ConvertMp4Task(std::weak_ptr<FfmpegTaskProcDetail> item);
   static void ConvertMp3Task(std::weak_ptr<FfmpegTaskProcDetail> item);
   static void MergeTask(std::weak_ptr<FfmpegTaskProcDetail> item);
+
+  /**
+   * @brief 获取当前正在运行的任务列表
+   * @return 任务进度信息列表
+   */
+  std::vector<FfmpegTaskProcess> getRunningTasks();
 
 private:
   /**

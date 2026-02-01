@@ -79,6 +79,54 @@ private:
   drogon::Task<void> processBatchAsync(const std::vector<StableFile> &batch,
                                        const AppConfig &config);
 
+  // 单文件转换结果
+  struct ConvertResult {
+    std::string originalPath;  // 原始文件路径
+    std::string convertedPath; // 转换后路径（成功时）
+    bool success;              // 是否成功
+    int retryCount;            // 实际重试次数
+  };
+
+  // 批量编码结果
+  struct BatchEncodeResult {
+    std::vector<ConvertResult> results;
+    std::vector<std::string> successPaths; // 成功转换的文件路径列表
+    int successCount;
+    int failCount;
+  };
+
+  /**
+   * @brief 将批次文件统一编码到 tmp 目录
+   * @param files 原始文件路径列表
+   * @param tmpDir 临时目录
+   * @param maxRetries 最大重试次数
+   * @return 批量编码结果
+   */
+  drogon::Task<BatchEncodeResult>
+  encodeFilesToTmpAsync(const std::vector<std::string> &files,
+                        const std::string &tmpDir, int maxRetries);
+
+  /**
+   * @brief 带重试的合并操作
+   * @param files 待合并的文件列表
+   * @param outputDir 输出目录
+   * @param maxRetries 最大重试次数
+   * @return 合并后的文件路径（失败时返回 nullopt）
+   */
+  drogon::Task<std::optional<std::string>>
+  mergeWithRetryAsync(const std::vector<std::string> &files,
+                      const std::string &outputDir, int maxRetries);
+
+  /**
+   * @brief 将文件移动到输出目录（降级处理）
+   * @param files tmp 目录中的文件列表
+   * @param outputDir 最终输出目录
+   * @return 移动后的文件路径列表
+   */
+  std::vector<std::string>
+  moveFilesToOutputDir(const std::vector<std::string> &files,
+                       const std::string &outputDir);
+
   void setPhase(const std::string &phase);
 
   // 服务指针

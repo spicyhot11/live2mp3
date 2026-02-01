@@ -48,6 +48,34 @@ FfmpegTaskResult FfmpegTaskProcDetail::getProcessResult() {
   result.createTime = createTime;
   result.startTime = startTime;
   result.endTime = endTime;
+
+  // 填充进度信息
+  auto pipe = pipeInfo.get();
+  if (pipe) {
+    result.progressTime = pipe->time;
+    result.progressFps = pipe->fps;
+    result.progressBitrate = pipe->bitrate;
+    // 计算速度倍率：已处理时长 / 实际耗时
+    if (startTime > 0) {
+      auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::system_clock::now().time_since_epoch())
+                     .count();
+      long long elapsed = now - startTime;
+      if (elapsed > 0 && pipe->time > 0) {
+        result.speed = static_cast<double>(pipe->time) / elapsed;
+      } else {
+        result.speed = 0.0;
+      }
+    } else {
+      result.speed = 0.0;
+    }
+  } else {
+    result.progressTime = 0;
+    result.progressFps = 0;
+    result.progressBitrate = 0;
+    result.speed = 0.0;
+  }
+
   return result;
 }
 
@@ -182,6 +210,17 @@ FfAsyncChannel::~FfAsyncChannel() { close(); }
 void FfAsyncChannel::close() {
   // TODO: 补充关闭逻辑
   // 可能需要取消等待中的任务
+}
+
+std::vector<FfmpegTaskProcess> FfAsyncChannel::getRunningTasks() {
+  std::vector<FfmpegTaskProcess> tasks;
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const auto &[id, task] : taskMap_) {
+    if (task) {
+      tasks.push_back(task->getProcessResult());
+    }
+  }
+  return tasks;
 }
 
 drogon::Task<std::optional<FfmpegTaskResult>>
@@ -530,6 +569,7 @@ void FfmpegTaskService::MergeTask(std::weak_ptr<FfmpegTaskProcDetail> item) {
     LOG_INFO << "MergeTask: 合并成功 " << inputFiles.size() << " 个文件 -> "
              << *outputPath;
   } else {
+    detail->setOutputFiles({});
     LOG_ERROR << "MergeTask: 合并失败 " << inputFiles.size() << " 个文件";
   }
 
@@ -632,4 +672,11 @@ void FfmpegTaskService::submitTaskAsync(
 
   // 通过 channel 异步发送任务
   channel_->sendAsync(std::move(input), resultCallback);
+}
+
+std::vector<FfmpegTaskProcess> FfmpegTaskService::getRunningTasks() {
+  if (!channel_) {
+    return {};
+  }
+  return channel_->getRunningTasks();
 }

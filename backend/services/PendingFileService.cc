@@ -225,6 +225,112 @@ std::vector<PendingFile> PendingFileService::getAllStableFiles() {
   return files;
 }
 
+std::vector<PendingFile> PendingFileService::getAndClaimStableFiles() {
+  std::vector<PendingFile> files;
+  sqlite3 *db = DatabaseService::getInstance().getDb();
+  if (!db)
+    return files;
+
+  // 使用 IMMEDIATE 事务，在开始时就获取写锁
+  // 这样可以防止其他线程同时读取和修改
+  if (sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION", nullptr, nullptr,
+                   nullptr) != SQLITE_OK) {
+    // 可能是其他线程正在持有锁，这是正常的并发情况
+    LOG_DEBUG << "[getAndClaimStableFiles] 无法获取数据库锁，可能存在并发任务: "
+              << sqlite3_errmsg(db);
+    return files;
+  }
+
+  // 1. 查询所有 stable 状态的文件
+  std::string selectSql =
+      "SELECT id, filepath, fingerprint, stable_count, status, "
+      "temp_mp4_path, temp_mp3_path, created_at, updated_at "
+      "FROM pending_files WHERE status = 'stable'";
+  sqlite3_stmt *selectStmt;
+
+  if (sqlite3_prepare_v2(db, selectSql.c_str(), -1, &selectStmt, 0) !=
+      SQLITE_OK) {
+    LOG_ERROR << "[getAndClaimStableFiles] Failed to prepare select: "
+              << sqlite3_errmsg(db);
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    return files;
+  }
+
+  std::vector<int> fileIds;
+  while (sqlite3_step(selectStmt) == SQLITE_ROW) {
+    PendingFile f;
+    f.id = sqlite3_column_int(selectStmt, 0);
+    f.filepath =
+        reinterpret_cast<const char *>(sqlite3_column_text(selectStmt, 1));
+    auto md5Text = sqlite3_column_text(selectStmt, 2);
+    f.fingerprint = md5Text ? reinterpret_cast<const char *>(md5Text) : "";
+    f.stable_count = sqlite3_column_int(selectStmt, 3);
+    f.status =
+        reinterpret_cast<const char *>(sqlite3_column_text(selectStmt, 4));
+    auto mp4Text = sqlite3_column_text(selectStmt, 5);
+    f.temp_mp4_path = mp4Text ? reinterpret_cast<const char *>(mp4Text) : "";
+    auto mp3Text = sqlite3_column_text(selectStmt, 6);
+    f.temp_mp3_path = mp3Text ? reinterpret_cast<const char *>(mp3Text) : "";
+    f.created_at =
+        reinterpret_cast<const char *>(sqlite3_column_text(selectStmt, 7));
+    f.updated_at =
+        reinterpret_cast<const char *>(sqlite3_column_text(selectStmt, 8));
+    files.push_back(f);
+    fileIds.push_back(f.id);
+  }
+  sqlite3_finalize(selectStmt);
+
+  if (files.empty()) {
+    sqlite3_exec(db, "COMMIT", nullptr, nullptr, nullptr);
+    return files;
+  }
+
+  // 2. 原子性地更新所有文件状态为 processing
+  std::string updateSql =
+      "UPDATE pending_files SET status = 'processing', "
+      "updated_at = datetime('now', 'localtime') WHERE id = ?";
+  sqlite3_stmt *updateStmt;
+
+  if (sqlite3_prepare_v2(db, updateSql.c_str(), -1, &updateStmt, 0) !=
+      SQLITE_OK) {
+    LOG_ERROR << "[getAndClaimStableFiles] Failed to prepare update: "
+              << sqlite3_errmsg(db);
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    return {};
+  }
+
+  for (int id : fileIds) {
+    sqlite3_reset(updateStmt);
+    sqlite3_bind_int(updateStmt, 1, id);
+    if (sqlite3_step(updateStmt) != SQLITE_DONE) {
+      LOG_ERROR << "[getAndClaimStableFiles] Failed to update file id=" << id
+                << ": " << sqlite3_errmsg(db);
+      sqlite3_finalize(updateStmt);
+      sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+      return {};
+    }
+  }
+  sqlite3_finalize(updateStmt);
+
+  // 3. 提交事务
+  if (sqlite3_exec(db, "COMMIT", nullptr, nullptr, nullptr) != SQLITE_OK) {
+    LOG_ERROR << "[getAndClaimStableFiles] Failed to commit: "
+              << sqlite3_errmsg(db);
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    return {};
+  }
+
+  LOG_INFO << "[getAndClaimStableFiles] Atomically claimed " << files.size()
+           << " stable files";
+
+  // 更新返回结果中的状态（因为我们已经更新了数据库）
+  for (auto &f : files) {
+    f.status = "processing";
+  }
+
+  return files;
+}
+
 bool PendingFileService::markAsProcessing(const std::string &filepath) {
   std::string sql =
       "UPDATE pending_files SET status = 'processing', "

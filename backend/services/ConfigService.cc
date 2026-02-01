@@ -67,7 +67,9 @@ void to_json(json &j, const SchedulerConfig &p) {
            {"merge_window_seconds", p.merge_window_seconds},
            {"stop_waiting_seconds", p.stop_waiting_seconds},
            {"stability_checks", p.stability_checks},
-           {"ffmpeg_worker_count", p.ffmpeg_worker_count}};
+           {"ffmpeg_worker_count", p.ffmpeg_worker_count},
+           {"convert_retry_count", p.convert_retry_count},
+           {"merge_retry_count", p.merge_retry_count}};
 }
 
 void from_json(const json &j, SchedulerConfig &p) {
@@ -79,6 +81,10 @@ void from_json(const json &j, SchedulerConfig &p) {
     j.at("stability_checks").get_to(p.stability_checks);
   if (j.contains("ffmpeg_worker_count"))
     j.at("ffmpeg_worker_count").get_to(p.ffmpeg_worker_count);
+  if (j.contains("convert_retry_count"))
+    j.at("convert_retry_count").get_to(p.convert_retry_count);
+  if (j.contains("merge_retry_count"))
+    j.at("merge_retry_count").get_to(p.merge_retry_count);
 }
 
 void to_json(json &j, const TempConfig &p) {
@@ -214,6 +220,10 @@ void ConfigService::loadConfig() {
           (*scheduler)["stability_checks"].value_or(2);
       currentConfig_.scheduler.ffmpeg_worker_count =
           (*scheduler)["ffmpeg_worker_count"].value_or(4);
+      currentConfig_.scheduler.convert_retry_count =
+          (*scheduler)["convert_retry_count"].value_or(3);
+      currentConfig_.scheduler.merge_retry_count =
+          (*scheduler)["merge_retry_count"].value_or(2);
     }
 
     // Temp config
@@ -301,7 +311,10 @@ void ConfigService::saveConfig() {
              currentConfig_.scheduler.stop_waiting_seconds},
             {"stability_checks", currentConfig_.scheduler.stability_checks},
             {"ffmpeg_worker_count",
-             currentConfig_.scheduler.ffmpeg_worker_count}});
+             currentConfig_.scheduler.ffmpeg_worker_count},
+            {"convert_retry_count",
+             currentConfig_.scheduler.convert_retry_count},
+            {"merge_retry_count", currentConfig_.scheduler.merge_retry_count}});
 
     // Temp section
     tbl.insert_or_assign(

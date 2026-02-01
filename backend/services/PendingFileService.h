@@ -81,6 +81,16 @@ public:
   std::vector<PendingFile> getAllStableFiles();
 
   /**
+   * @brief 原子性地获取并标记稳定文件为处理中
+   *
+   * 在同一个事务中查询并标记文件，避免并发任务获取相同文件。
+   * 这是解决并发竞态条件的关键方法。
+   *
+   * @return std::vector<PendingFile> 成功标记为 "processing" 的文件列表
+   */
+  std::vector<PendingFile> getAndClaimStableFiles();
+
+  /**
    * @brief 标记文件为处理中
    *
    * 将文件状态更新为 "processing"，表示该文件正在被调度器处理。
