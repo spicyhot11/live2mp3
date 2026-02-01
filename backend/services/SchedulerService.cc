@@ -160,15 +160,16 @@ void SchedulerService::runStabilityScan() {
       currentFile_ = file;
     }
 
-    // 计算文件 MD5
-    std::string md5 = live2mp3::utils::calculateMD5(file);
-    if (md5.empty()) {
-      LOG_WARN << "Failed to calculate MD5 for: " << file;
+    // 计算文件指纹
+    std::string fingerprint = live2mp3::utils::calculateFileFingerprint(file);
+    if (fingerprint.empty()) {
+      LOG_WARN << "无法计算文件指纹: " << file;
       continue;
     }
 
     // 更新或添加到待处理文件列表
-    int stableCount = pendingFileServicePtr_->addOrUpdateFile(file, md5);
+    int stableCount =
+        pendingFileServicePtr_->addOrUpdateFile(file, fingerprint);
 
     if (stableCount >= requiredStableCount) {
       LOG_INFO << "File is stable (count=" << stableCount << "): " << file;

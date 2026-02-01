@@ -11,7 +11,7 @@
 struct PendingFile {
   int id;
   std::string filepath;
-  std::string current_md5;
+  std::string fingerprint;
   int stable_count;
   std::string status;
   std::string temp_mp4_path;

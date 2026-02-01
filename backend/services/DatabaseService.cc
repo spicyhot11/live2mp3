@@ -46,7 +46,7 @@ void DatabaseService::initSchema() {
       "CREATE TABLE IF NOT EXISTS pending_files ("
       "id INTEGER PRIMARY KEY AUTOINCREMENT,"
       "filepath TEXT UNIQUE NOT NULL,"
-      "current_md5 TEXT,"
+      "fingerprint TEXT,"
       "stable_count INTEGER DEFAULT 0,"
       "status TEXT DEFAULT 'pending',"
       "temp_mp4_path TEXT,"

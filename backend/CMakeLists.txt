@@ -37,6 +37,7 @@ add_executable(live2mp3 ${SRC_FILES})
 # 链接依赖 (使用 Conan 提供的 Target 名称)
 find_package(SQLite3 REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(xxHash REQUIRED)
 
 target_link_libraries(live2mp3 PRIVATE 
     Drogon::Drogon
@@ -46,4 +47,5 @@ target_link_libraries(live2mp3 PRIVATE
     OpenSSL::SSL
     OpenSSL::Crypto
     tomlplusplus::tomlplusplus
+    xxHash::xxhash
 )

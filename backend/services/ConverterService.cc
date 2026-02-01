@@ -53,14 +53,15 @@ static bool checkDeleteRule(const std::string &subDirName,
 std::optional<std::string>
 ConverterService::convertToMp3(const std::string &inputPath) {
   // 0. Check History
-  std::string md5 = live2mp3::utils::calculateMD5(inputPath);
-  if (md5.empty()) {
-    LOG_ERROR << "Failed to calculate MD5 for: " << inputPath;
+  std::string fingerprint =
+      live2mp3::utils::calculateFileFingerprint(inputPath);
+  if (fingerprint.empty()) {
+    LOG_ERROR << "无法计算文件指纹: " << inputPath;
     return std::nullopt;
   }
 
-  if (pendingFileServicePtr->isProcessed(md5)) {
-    LOG_INFO << "File already processed (MD5 match): " << inputPath;
+  if (pendingFileServicePtr->isProcessed(fingerprint)) {
+    LOG_INFO << "文件已处理 (fingerprint match): " << inputPath;
     return std::nullopt; // Or return existing path if we knew it? For now
                          // nullopt implies "nothing done"
   }
