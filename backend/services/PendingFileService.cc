@@ -1,7 +1,10 @@
 #include "PendingFileService.h"
 #include "DatabaseService.h"
 #include <drogon/drogon.h>
+#include <filesystem>
 #include <sqlite3.h>
+
+namespace fs = std::filesystem;
 
 void to_json(nlohmann::json &j, const PendingFile &p) {
   j = nlohmann::json{{"id", p.id},
@@ -177,6 +180,8 @@ bool PendingFileService::markAsStable(const std::string &filepath) {
   sqlite3_finalize(stmt);
   if (success) {
     LOG_DEBUG << "[markAsStable] Marked as stable: " << filepath;
+    // 检测并处理同名不同扩展名的文件
+    resolveDuplicateExtensions(filepath);
   }
   return success;
 }
@@ -665,4 +670,106 @@ std::vector<PendingFile> PendingFileService::getAll() {
 
   sqlite3_finalize(stmt);
   return files;
+}
+
+bool PendingFileService::markAsDeprecated(const std::string &filepath) {
+  std::string sql =
+      "UPDATE pending_files SET status = 'deprecated', "
+      "updated_at = datetime('now', 'localtime') WHERE filepath = ?";
+  sqlite3 *db = DatabaseService::getInstance().getDb();
+  sqlite3_stmt *stmt;
+
+  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
+    LOG_ERROR << "[markAsDeprecated] Failed to prepare: " << sqlite3_errmsg(db);
+    return false;
+  }
+  sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+  bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+  sqlite3_finalize(stmt);
+  if (success) {
+    LOG_INFO << "[markAsDeprecated] 文件标记为废弃: " << filepath;
+  }
+  return success;
+}
+
+void PendingFileService::resolveDuplicateExtensions(
+    const std::string &filepath) {
+  sqlite3 *db = DatabaseService::getInstance().getDb();
+  if (!db)
+    return;
+
+  // 1. 提取文件 stem（不含扩展名）和目录
+  fs::path path(filepath);
+  std::string stem = path.stem().string();
+  std::string dir = path.parent_path().string();
+
+  // 2. 查询同目录下同 stem 但不同扩展名的 stable 文件
+  // 使用 LIKE 模式匹配：目录/stem.%
+  std::string pattern = (fs::path(dir) / (stem + ".%")).string();
+  std::string sql =
+      "SELECT id, filepath, current_md5, stable_count, status, "
+      "temp_mp4_path, temp_mp3_path, created_at, updated_at "
+      "FROM pending_files WHERE filepath LIKE ? AND status = 'stable'";
+  sqlite3_stmt *stmt;
+
+  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
+    LOG_ERROR << "[resolveDuplicateExtensions] Failed to prepare query: "
+              << sqlite3_errmsg(db);
+    return;
+  }
+
+  sqlite3_bind_text(stmt, 1, pattern.c_str(), -1, SQLITE_STATIC);
+
+  // 收集所有匹配的 stable 文件
+  struct FileInfo {
+    std::string filepath;
+    uintmax_t size;
+  };
+  std::vector<FileInfo> candidates;
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    std::string candidatePath =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+
+    // 验证：确保 stem 完全匹配（避免 "video.flv" 匹配 "video_1.flv"）
+    fs::path candidateFsPath(candidatePath);
+    if (candidateFsPath.stem().string() != stem) {
+      continue;
+    }
+
+    // 获取文件大小
+    std::error_code ec;
+    uintmax_t fileSize = fs::file_size(candidatePath, ec);
+    if (ec) {
+      LOG_WARN << "[resolveDuplicateExtensions] 无法获取文件大小: "
+               << candidatePath << ", 错误: " << ec.message();
+      continue;
+    }
+
+    candidates.push_back({candidatePath, fileSize});
+  }
+  sqlite3_finalize(stmt);
+
+  // 3. 如果只有一个文件或没有文件，无需处理
+  if (candidates.size() <= 1) {
+    return;
+  }
+
+  LOG_INFO << "[resolveDuplicateExtensions] 发现 " << candidates.size()
+           << " 个同名不同扩展名的文件 (stem=" << stem << ")";
+
+  // 4. 找出最大的文件
+  auto maxIt = std::max_element(
+      candidates.begin(), candidates.end(),
+      [](const FileInfo &a, const FileInfo &b) { return a.size < b.size; });
+
+  // 5. 将非最大文件标记为 deprecated
+  for (const auto &file : candidates) {
+    if (file.filepath != maxIt->filepath) {
+      LOG_INFO << "[resolveDuplicateExtensions] 标记为废弃: " << file.filepath
+               << " (size=" << file.size << " < " << maxIt->filepath
+               << " size=" << maxIt->size << ")";
+      markAsDeprecated(file.filepath);
+    }
+  }
 }

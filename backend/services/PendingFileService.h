@@ -6,8 +6,8 @@
 #include <string>
 #include <vector>
 
-// 状态值: "pending"(待处理), "stable"(稳定), "converting"(转换中),
-// "staged"(已暂存), "completed"(已完成)
+// 状态值: "pending"(待处理), "stable"(稳定), "processing"(处理中),
+// "staged"(已暂存), "completed"(已完成), "deprecated"(已废弃-同名文件中较小者)
 struct PendingFile {
   int id;
   std::string filepath;
@@ -217,4 +217,27 @@ public:
    * @return std::vector<PendingFile> 所有文件记录
    */
   std::vector<PendingFile> getAll();
+
+  /**
+   * @brief 标记文件为废弃状态
+   *
+   * 用于标记同名不同扩展名文件中较小的一方。
+   * 废弃的文件不会参与后续的合并和转换。
+   *
+   * @param filepath 文件路径
+   * @return true 操作成功
+   * @return false 操作失败
+   */
+  bool markAsDeprecated(const std::string &filepath);
+
+  /**
+   * @brief 解决同名不同扩展名的文件冲突
+   *
+   * 检查是否存在同 stem（文件名不含扩展名）但不同扩展名的 stable 文件，
+   * 如果存在则将较小的文件标记为 deprecated。
+   * 应在文件变为 stable 状态后调用。
+   *
+   * @param filepath 刚变为 stable 状态的文件路径
+   */
+  void resolveDuplicateExtensions(const std::string &filepath);
 };

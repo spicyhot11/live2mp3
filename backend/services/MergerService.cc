@@ -101,7 +101,8 @@ std::optional<std::string> MergerService::mergeVideoFiles(
   std::string writingPath = (fs::path(outputDir) / writingName).string();
 
   // 创建 concat 列表文件
-  std::string listPath = (fs::path(outputDir) / "concat_list.txt").string();
+  std::string listPath =
+      (fs::path(outputDir) / (stem + "_concat_list.txt")).string();
   {
     std::ofstream listFile(listPath);
     if (!listFile.is_open()) {
