@@ -221,6 +221,13 @@ std::optional<std::string> ConverterService::convertToAv1Mp4(
     outputPath = (fs::path(outputDir) / filename).string();
   }
 
+  // 生成临时写入路径（添加 _writing 后缀）
+  fs::path outputFsPath(outputPath);
+  std::string writingPath =
+      (outputFsPath.parent_path() / (outputFsPath.stem().string() + "_writing" +
+                                     outputFsPath.extension().string()))
+          .string();
+
   // 确保输出目录存在
   try {
     fs::create_directories(fs::path(outputPath).parent_path());
@@ -231,20 +238,34 @@ std::optional<std::string> ConverterService::convertToAv1Mp4(
 
   // FFmpeg 命令：使用 SVT-AV1 编码器进行 AV1 转码
   // CRF 30 提供较好的质量/大小平衡
+  // 先输出到临时文件
   std::string cmd = fmt::format("ffmpeg -y -i \"{}\" -c:v libsvtav1 -crf 30 "
                                 "-preset 6 -c:a aac -b:a 128k \"{}\" 2>&1",
-                                inputPath, outputPath);
+                                inputPath, writingPath);
 
-  LOG_INFO << "开始 AV1 转换: " << inputPath << " -> " << outputPath;
+  LOG_INFO << "开始 AV1 转换: " << inputPath << " -> " << writingPath
+           << " (临时文件)";
 
   if (live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback)) {
-    LOG_INFO << "AV1 转换成功: " << outputPath;
-    return outputPath;
+    // 转换成功，重命名为最终文件名
+    try {
+      fs::rename(writingPath, outputPath);
+      LOG_INFO << "AV1 转换成功: " << outputPath;
+      return outputPath;
+    } catch (const fs::filesystem_error &e) {
+      LOG_ERROR << "重命名文件失败: " << writingPath << " -> " << outputPath
+                << ", 错误: " << e.what();
+      // 清理临时文件
+      if (fs::exists(writingPath)) {
+        fs::remove(writingPath);
+      }
+      return std::nullopt;
+    }
   } else {
     LOG_ERROR << "AV1 转换失败: " << inputPath;
-    // 清理失败的输出文件
-    if (fs::exists(outputPath)) {
-      fs::remove(outputPath);
+    // 清理失败的临时文件
+    if (fs::exists(writingPath)) {
+      fs::remove(writingPath);
     }
     return std::nullopt;
   }
@@ -268,6 +289,13 @@ std::optional<std::string> ConverterService::extractMp3FromVideo(
     outputPath = (fs::path(outputDir) / filename).string();
   }
 
+  // 生成临时写入路径（添加 _writing 后缀）
+  fs::path outputFsPath(outputPath);
+  std::string writingPath =
+      (outputFsPath.parent_path() / (outputFsPath.stem().string() + "_writing" +
+                                     outputFsPath.extension().string()))
+          .string();
+
   // 确保输出目录存在
   try {
     fs::create_directories(fs::path(outputPath).parent_path());
@@ -277,19 +305,34 @@ std::optional<std::string> ConverterService::extractMp3FromVideo(
   }
 
   // FFmpeg 命令：提取音频并转为 MP3
+  // 先输出到临时文件
   std::string cmd = fmt::format(
       "ffmpeg -y -i \"{}\" -vn -acodec libmp3lame -q:a 2 \"{}\" 2>&1",
-      videoPath, outputPath);
+      videoPath, writingPath);
 
-  LOG_INFO << "开始提取 MP3: " << videoPath;
+  LOG_INFO << "开始提取 MP3: " << videoPath << " -> " << writingPath
+           << " (临时文件)";
 
   if (live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback)) {
-    LOG_INFO << "MP3 提取成功: " << outputPath;
-    return outputPath;
+    // 提取成功，重命名为最终文件名
+    try {
+      fs::rename(writingPath, outputPath);
+      LOG_INFO << "MP3 提取成功: " << outputPath;
+      return outputPath;
+    } catch (const fs::filesystem_error &e) {
+      LOG_ERROR << "重命名文件失败: " << writingPath << " -> " << outputPath
+                << ", 错误: " << e.what();
+      // 清理临时文件
+      if (fs::exists(writingPath)) {
+        fs::remove(writingPath);
+      }
+      return std::nullopt;
+    }
   } else {
     LOG_ERROR << "MP3 提取失败: " << videoPath;
-    if (fs::exists(outputPath)) {
-      fs::remove(outputPath);
+    // 清理失败的临时文件
+    if (fs::exists(writingPath)) {
+      fs::remove(writingPath);
     }
     return std::nullopt;
   }

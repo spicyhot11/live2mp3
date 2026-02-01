@@ -380,6 +380,8 @@ void FfmpegTaskService::ConvertMp4Task(
                << *outputPath;
     } else {
       hasError = true;
+      // 转换失败，确保 outputFiles 为空
+      detail->setOutputFiles({});
       resultMessage += "转换失败: " + inputPath + "; ";
       LOG_ERROR << "ConvertMp4Task: 转换失败 " << inputPath;
     }
@@ -415,12 +417,23 @@ void FfmpegTaskService::ConvertMp3Task(
 
   if (inputFiles.empty()) {
     LOG_WARN << "FfmpegTaskService::ConvertMp3Task: 无输入文件";
+    detail->setOutputFiles({});
     return;
   }
 
   if (outputDirs.empty()) {
     LOG_ERROR << "FfmpegTaskService::ConvertMp3Task: 未指定输出目录";
+    detail->setOutputFiles({});
     return;
+  }
+
+  // 检查输入文件是否有效（确保不抛出异常）
+  for (const auto &file : inputFiles) {
+    if (file.empty()) {
+      LOG_ERROR << "FfmpegTaskService::ConvertMp3Task: 输入文件路径为空";
+      detail->setOutputFiles({});
+      return;
+    }
   }
 
   std::string outputDir = outputDirs[0];
@@ -452,6 +465,8 @@ void FfmpegTaskService::ConvertMp3Task(
                << *outputPath;
     } else {
       hasError = true;
+      // 提取失败，确保 outputFiles 为空
+      detail->setOutputFiles({});
       resultMessage += "提取失败: " + inputPath + "; ";
       LOG_ERROR << "ConvertMp3Task: 提取失败 " << inputPath;
     }

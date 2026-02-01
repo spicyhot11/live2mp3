@@ -96,6 +96,10 @@ std::optional<std::string> MergerService::mergeVideoFiles(
   std::string outputName = stem + "_merged" + extension;
   std::string outputPath = (fs::path(outputDir) / outputName).string();
 
+  // 生成临时写入路径（添加 _writing 后缀）
+  std::string writingName = stem + "_merged_writing" + extension;
+  std::string writingPath = (fs::path(outputDir) / writingName).string();
+
   // 创建 concat 列表文件
   std::string listPath = (fs::path(outputDir) / "concat_list.txt").string();
   {
@@ -109,13 +113,15 @@ std::optional<std::string> MergerService::mergeVideoFiles(
     }
   }
 
-  LOG_INFO << "开始合并 " << files.size() << " 个文件 -> " << outputPath;
+  LOG_INFO << "开始合并 " << files.size() << " 个文件 -> " << writingPath
+           << " (临时文件)";
 
   // FFmpeg 命令：使用 concat 协议合并文件
   // -c copy 表示直接复制流，不重新编码（要求所有文件编码格式一致）
+  // 先输出到临时文件
   std::string cmd =
       fmt::format("ffmpeg -f concat -safe 0 -i \"{}\" -c copy -y \"{}\" 2>&1",
-                  listPath, outputPath);
+                  listPath, writingPath);
 
   bool success = live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback);
 
@@ -125,13 +131,25 @@ std::optional<std::string> MergerService::mergeVideoFiles(
   }
 
   if (success) {
-    LOG_INFO << "合并成功: " << outputPath;
-    return outputPath;
+    // 合并成功，重命名为最终文件名
+    try {
+      fs::rename(writingPath, outputPath);
+      LOG_INFO << "合并成功: " << outputPath;
+      return outputPath;
+    } catch (const fs::filesystem_error &e) {
+      LOG_ERROR << "重命名文件失败: " << writingPath << " -> " << outputPath
+                << ", 错误: " << e.what();
+      // 清理临时文件
+      if (fs::exists(writingPath)) {
+        fs::remove(writingPath);
+      }
+      return std::nullopt;
+    }
   } else {
     LOG_ERROR << "合并失败";
-    // 清理失败的输出文件
-    if (fs::exists(outputPath)) {
-      fs::remove(outputPath);
+    // 清理失败的临时文件
+    if (fs::exists(writingPath)) {
+      fs::remove(writingPath);
     }
     return std::nullopt;
   }
