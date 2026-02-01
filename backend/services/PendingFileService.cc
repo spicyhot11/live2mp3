@@ -218,6 +218,156 @@ std::vector<PendingFile> PendingFileService::getAllStableFiles() {
   return files;
 }
 
+bool PendingFileService::markAsProcessing(const std::string &filepath) {
+  std::string sql =
+      "UPDATE pending_files SET status = 'processing', "
+      "updated_at = datetime('now', 'localtime') WHERE filepath = ?";
+  sqlite3 *db = DatabaseService::getInstance().getDb();
+  sqlite3_stmt *stmt;
+
+  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
+    LOG_ERROR << "[markAsProcessing] Failed to prepare: " << sqlite3_errmsg(db);
+    return false;
+  }
+  sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+  bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+  sqlite3_finalize(stmt);
+  if (success) {
+    LOG_DEBUG << "[markAsProcessing] Marked as processing: " << filepath;
+  }
+  return success;
+}
+
+bool PendingFileService::markAsProcessingBatch(
+    const std::vector<std::string> &filepaths) {
+  if (filepaths.empty())
+    return true;
+
+  sqlite3 *db = DatabaseService::getInstance().getDb();
+  if (!db) {
+    LOG_ERROR << "[markAsProcessingBatch] Database not available";
+    return false;
+  }
+
+  // 开始事务（使用 IMMEDIATE 锁定数据库，防止并发修改）
+  if (sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION", nullptr, nullptr,
+                   nullptr) != SQLITE_OK) {
+    LOG_ERROR << "[markAsProcessingBatch] Failed to begin transaction: "
+              << sqlite3_errmsg(db);
+    return false;
+  }
+
+  // 条件更新：只有状态为 'stable' 时才能更新为 'processing'
+  // 这样如果另一个线程已经拿走了这个文件，更新将不会生效
+  std::string sql = "UPDATE pending_files SET status = 'processing', "
+                    "updated_at = datetime('now', 'localtime') "
+                    "WHERE filepath = ? AND status = 'stable'";
+  sqlite3_stmt *stmt;
+
+  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
+    LOG_ERROR << "[markAsProcessingBatch] Failed to prepare: "
+              << sqlite3_errmsg(db);
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    return false;
+  }
+
+  int totalUpdated = 0;
+  for (const auto &filepath : filepaths) {
+    sqlite3_reset(stmt);
+    sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+      LOG_ERROR << "[markAsProcessingBatch] Failed to update: " << filepath;
+      sqlite3_finalize(stmt);
+      sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+      return false;
+    }
+    // 检查实际更新的行数
+    int changes = sqlite3_changes(db);
+    if (changes == 0) {
+      // 文件状态不是 stable，可能已被其他线程处理
+      LOG_WARN << "[markAsProcessingBatch] File not in stable state, "
+                  "skipping: "
+               << filepath;
+    }
+    totalUpdated += changes;
+  }
+
+  sqlite3_finalize(stmt);
+
+  // 验证：如果没有任何文件被成功标记，回滚事务
+  if (totalUpdated == 0) {
+    LOG_WARN << "[markAsProcessingBatch] No files were marked as processing "
+                "(all may have been claimed by another thread)";
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    return false;
+  }
+
+  // 提交事务
+  if (sqlite3_exec(db, "COMMIT", nullptr, nullptr, nullptr) != SQLITE_OK) {
+    LOG_ERROR << "[markAsProcessingBatch] Failed to commit transaction";
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    return false;
+  }
+
+  LOG_DEBUG << "[markAsProcessingBatch] Marked " << totalUpdated << "/"
+            << filepaths.size() << " files as processing";
+  return true;
+}
+
+bool PendingFileService::rollbackToStable(
+    const std::vector<std::string> &filepaths) {
+  if (filepaths.empty())
+    return true;
+
+  sqlite3 *db = DatabaseService::getInstance().getDb();
+  if (!db) {
+    LOG_ERROR << "[rollbackToStable] Database not available";
+    return false;
+  }
+
+  // 开始事务
+  if (sqlite3_exec(db, "BEGIN TRANSACTION", nullptr, nullptr, nullptr) !=
+      SQLITE_OK) {
+    LOG_ERROR << "[rollbackToStable] Failed to begin transaction";
+    return false;
+  }
+
+  std::string sql =
+      "UPDATE pending_files SET status = 'stable', "
+      "updated_at = datetime('now', 'localtime') WHERE filepath = ?";
+  sqlite3_stmt *stmt;
+
+  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
+    LOG_ERROR << "[rollbackToStable] Failed to prepare: " << sqlite3_errmsg(db);
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    return false;
+  }
+
+  for (const auto &filepath : filepaths) {
+    sqlite3_reset(stmt);
+    sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+      LOG_ERROR << "[rollbackToStable] Failed to rollback: " << filepath;
+      sqlite3_finalize(stmt);
+      sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+      return false;
+    }
+  }
+
+  sqlite3_finalize(stmt);
+
+  // 提交事务
+  if (sqlite3_exec(db, "COMMIT", nullptr, nullptr, nullptr) != SQLITE_OK) {
+    LOG_ERROR << "[rollbackToStable] Failed to commit transaction";
+    sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    return false;
+  }
+
+  LOG_WARN << "[rollbackToStable] Rolled back " << filepaths.size()
+           << " files to stable status";
+  return true;
+}
+
 bool PendingFileService::markAsConverting(const std::string &filepath) {
   std::string sql =
       "UPDATE pending_files SET status = 'converting', "

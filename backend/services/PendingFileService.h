@@ -81,6 +81,40 @@ public:
   std::vector<PendingFile> getAllStableFiles();
 
   /**
+   * @brief 标记文件为处理中
+   *
+   * 将文件状态更新为 "processing"，表示该文件正在被调度器处理。
+   * 扫描阶段会自动跳过处于此状态的文件。
+   *
+   * @param filepath 文件路径
+   * @return true 操作成功
+   * @return false 操作失败
+   */
+  bool markAsProcessing(const std::string &filepath);
+
+  /**
+   * @brief 批量标记文件为处理中
+   *
+   * 在事务中将多个文件状态更新为 "processing"，确保原子性。
+   *
+   * @param filepaths 文件路径列表
+   * @return true 全部标记成功
+   * @return false 操作失败（事务回滚）
+   */
+  bool markAsProcessingBatch(const std::vector<std::string> &filepaths);
+
+  /**
+   * @brief 批量回滚文件状态到稳定
+   *
+   * 当处理失败时，将文件状态从 "processing" 回滚到 "stable"。
+   *
+   * @param filepaths 文件路径列表
+   * @return true 全部回滚成功
+   * @return false 操作失败
+   */
+  bool rollbackToStable(const std::vector<std::string> &filepaths);
+
+  /**
    * @brief 标记文件为转换中
    *
    * @param filepath 文件路径

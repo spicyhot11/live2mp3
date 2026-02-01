@@ -51,6 +51,18 @@ public:
   static std::optional<std::chrono::system_clock::time_point>
   parseTime(const std::string &filename);
 
+  /**
+   * @brief 从文件名解析主播名（用于分组）
+   *
+   * 支持两种格式：
+   * - 格式1: "[时间戳][主播名][标题].flv/ts" -> 提取主播名
+   * - 格式2: "录制-主播名-时间戳-xxx-标题.flv" -> 提取主播名
+   *
+   * @param filename 文件名
+   * @return std::string 主播名，无法解析时返回空字符串
+   */
+  static std::string parseTitle(const std::string &filename);
+
 private:
   std::shared_ptr<ConfigService> configServicePtr;
 };

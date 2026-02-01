@@ -38,7 +38,8 @@ public:
   // 立即触发一次任务运行 (手动触发) - 使用所有已暂存的文件
   void triggerNow();
 
-  bool isRunning() const { return running_; }
+  /// @brief 检查扫描阶段是否正在运行
+  bool isRunning() const { return scanRunning_; }
   std::string getCurrentFile();
   std::string getCurrentPhase();
 
@@ -59,28 +60,23 @@ private:
   void runStabilityScan();
 
   /**
-   * @brief 阶段 2: 将稳定状态的文件转换为 AV1 MP4
-   * 通过 FfmpegTaskService 发送转换任务
+   * @brief 阶段 2: 合并稳定文件并编码输出
+   * 按主播名分组，批次分配，判断结束条件后执行合并+编码
+   * @param immediate 立即模式，跳过等待判断
    */
-  drogon::Task<void> runConversionAsync();
-
-  /**
-   * @brief 阶段 3: 处理已暂存的文件 (合并并移动到输出目录)
-   * 通过 FfmpegTaskService 发送合并任务
-   */
-  drogon::Task<void> runMergeAndOutputAsync(bool immediate = false);
+  drogon::Task<void> runMergeEncodeOutputAsync(bool immediate = false);
 
   // 分组辅助结构
-  struct StagedFile {
+  struct StableFile {
     PendingFile pf;
     std::chrono::system_clock::time_point time;
   };
 
   /**
    * @brief 处理确认的一批文件
-   * 通过 FfmpegTaskService 发送合并和MP3提取任务
+   * 通过 FfmpegTaskService 发送合并、编码和MP3提取任务
    */
-  drogon::Task<void> processBatchAsync(const std::vector<StagedFile> &batch,
+  drogon::Task<void> processBatchAsync(const std::vector<StableFile> &batch,
                                        const AppConfig &config);
 
   void setPhase(const std::string &phase);
@@ -94,7 +90,8 @@ private:
   std::shared_ptr<FfmpegTaskService> ffmpegTaskServicePtr_;
   std::shared_ptr<CommonThreadService> commonThreadServicePtr_;
 
-  std::atomic<bool> running_{false};
+  /// @brief 扫描阶段运行标志（防止扫描阶段并发）
+  std::atomic<bool> scanRunning_{false};
   std::string currentFile_;
   std::string currentPhase_;
   std::mutex mutex_;

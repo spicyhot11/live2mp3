@@ -51,9 +51,11 @@ struct OutputConfig {
  */
 struct SchedulerConfig {
   int scan_interval_seconds;
-  int merge_window_seconds = 7200; // 合并时间窗口(秒)，默认2小时
-  int stability_checks = 2;        // 稳定性检查次数(连续MD5一致次数)
-  int ffmpeg_worker_count = 4;     // FFmpeg 并发 Worker 数量
+  int merge_window_seconds = 7200; // 合并时间窗口(秒)，同一录播相邻片段最大间隔
+  int stop_waiting_seconds =
+      600;                     // 结束等待时间(秒)，最后片段超过此时间则开始合并
+  int stability_checks = 2;    // 稳定性检查次数(连续MD5一致次数)
+  int ffmpeg_worker_count = 4; // FFmpeg 并发 Worker 数量
 };
 
 /**

@@ -65,6 +65,7 @@ void from_json(const json &j, OutputConfig &p) {
 void to_json(json &j, const SchedulerConfig &p) {
   j = json{{"scan_interval_seconds", p.scan_interval_seconds},
            {"merge_window_seconds", p.merge_window_seconds},
+           {"stop_waiting_seconds", p.stop_waiting_seconds},
            {"stability_checks", p.stability_checks},
            {"ffmpeg_worker_count", p.ffmpeg_worker_count}};
 }
@@ -72,6 +73,8 @@ void to_json(json &j, const SchedulerConfig &p) {
 void from_json(const json &j, SchedulerConfig &p) {
   j.at("scan_interval_seconds").get_to(p.scan_interval_seconds);
   j.at("merge_window_seconds").get_to(p.merge_window_seconds);
+  if (j.contains("stop_waiting_seconds"))
+    j.at("stop_waiting_seconds").get_to(p.stop_waiting_seconds);
   if (j.contains("stability_checks"))
     j.at("stability_checks").get_to(p.stability_checks);
   if (j.contains("ffmpeg_worker_count"))
@@ -205,6 +208,8 @@ void ConfigService::loadConfig() {
           (*scheduler)["scan_interval_seconds"].value_or(60);
       currentConfig_.scheduler.merge_window_seconds =
           (*scheduler)["merge_window_seconds"].value_or(7200);
+      currentConfig_.scheduler.stop_waiting_seconds =
+          (*scheduler)["stop_waiting_seconds"].value_or(600);
       currentConfig_.scheduler.stability_checks =
           (*scheduler)["stability_checks"].value_or(2);
       currentConfig_.scheduler.ffmpeg_worker_count =
@@ -292,6 +297,8 @@ void ConfigService::saveConfig() {
              currentConfig_.scheduler.scan_interval_seconds},
             {"merge_window_seconds",
              currentConfig_.scheduler.merge_window_seconds},
+            {"stop_waiting_seconds",
+             currentConfig_.scheduler.stop_waiting_seconds},
             {"stability_checks", currentConfig_.scheduler.stability_checks},
             {"ffmpeg_worker_count",
              currentConfig_.scheduler.ffmpeg_worker_count}});

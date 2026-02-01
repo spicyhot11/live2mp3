@@ -56,6 +56,27 @@ MergerService::parseTime(const std::string &filename) {
   return std::nullopt;
 }
 
+std::string MergerService::parseTitle(const std::string &filename) {
+  std::smatch match;
+
+  // 格式1: [2026-01-06 12-16-34][主播名][标题].flv/ts
+  // 提取第二个方括号内的主播名
+  static std::regex re1(R"(^\[[^\]]+\]\[([^\]]+)\])");
+  if (std::regex_search(filename, match, re1)) {
+    return match[1].str();
+  }
+
+  // 格式2: 录制-主播名-20260125-111024-223-标题.flv
+  // 提取"录制-"后、时间戳前的主播名
+  static std::regex re2(R"(^录制-([^-]+)-\d{8}-\d{6})");
+  if (std::regex_search(filename, match, re2)) {
+    return match[1].str();
+  }
+
+  // 无法解析时返回空字符串
+  return "";
+}
+
 std::optional<std::string> MergerService::mergeVideoFiles(
     const std::vector<std::string> &files, const std::string &outputDir,
     live2mp3::utils::FfmpegProgressCallback progressCallback) {

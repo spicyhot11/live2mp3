@@ -206,15 +206,20 @@ std::optional<std::string> ConverterService::convertToAv1Mp4(
     live2mp3::utils::FfmpegProgressCallback progressCallback) {
   auto config = configServicePtr->getConfig();
 
-  // 确定输出目录
-  std::string targetDir = outputDir;
-  if (targetDir.empty()) {
-    targetDir = config.temp.temp_dir.empty() ? config.output.output_root
-                                             : config.temp.temp_dir;
+  // 确定输出路径
+  std::string outputPath;
+  if (outputDir.empty()) {
+    // 未指定输出目录时，使用默认逻辑（会拼接父目录名）
+    std::string targetDir = config.temp.temp_dir.empty()
+                                ? config.output.output_root
+                                : config.temp.temp_dir;
+    outputPath = determineOutputPathWithExt(inputPath, targetDir, ".mp4");
+  } else {
+    // 明确指定输出目录时，直接在该目录下输出
+    fs::path p(inputPath);
+    std::string filename = p.stem().string() + ".mp4";
+    outputPath = (fs::path(outputDir) / filename).string();
   }
-
-  std::string outputPath =
-      determineOutputPathWithExt(inputPath, targetDir, ".mp4");
 
   // 确保输出目录存在
   try {
@@ -250,11 +255,18 @@ std::optional<std::string> ConverterService::extractMp3FromVideo(
     live2mp3::utils::FfmpegProgressCallback progressCallback) {
   auto config = configServicePtr->getConfig();
 
-  std::string targetDir =
-      outputDir.empty() ? config.output.output_root : outputDir;
-
-  std::string outputPath =
-      determineOutputPathWithExt(videoPath, targetDir, ".mp3");
+  // 确定输出路径
+  std::string outputPath;
+  if (outputDir.empty()) {
+    // 未指定输出目录时，使用默认逻辑（会拼接父目录名）
+    outputPath = determineOutputPathWithExt(videoPath,
+                                            config.output.output_root, ".mp3");
+  } else {
+    // 明确指定输出目录时，直接在该目录下输出
+    fs::path p(videoPath);
+    std::string filename = p.stem().string() + ".mp3";
+    outputPath = (fs::path(outputDir) / filename).string();
+  }
 
   // 确保输出目录存在
   try {

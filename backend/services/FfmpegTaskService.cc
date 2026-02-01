@@ -356,6 +356,9 @@ void FfmpegTaskService::ConvertMp4Task(
   // 创建进度回调，用于更新任务状态
   auto progressCallback = [item](const live2mp3::utils::FfmpegPipeInfo &info) {
     if (auto detail = item.lock()) {
+      // LOG_DEBUG << "FfmpegTaskService::ConvertMp4Task: 进度回调 FPS: " <<
+      // info.fps
+      //           << " BITRATE: " << info.bitrate << " TIME: " << info.time;
       detail->setPipeInfo(info);
     }
   };
