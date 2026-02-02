@@ -124,7 +124,14 @@ std::optional<std::string> MergerService::mergeVideoFiles(
       fmt::format("ffmpeg -f concat -safe 0 -i \"{}\" -c copy -y \"{}\" 2>&1",
                   listPath, writingPath);
 
-  bool success = live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback);
+  // 获取所有输入文件的总时长用于计算进度百分比
+  int totalDuration = live2mp3::utils::getTotalMediaDuration(files);
+  if (totalDuration < 0) {
+    LOG_WARN << "无法获取媒体总时长，进度百分比将不可用";
+    totalDuration = 0;
+  }
+
+  bool success = live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback, totalDuration);
 
   // 清理列表文件
   if (fs::exists(listPath)) {

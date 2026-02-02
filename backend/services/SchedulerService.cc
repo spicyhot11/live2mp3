@@ -161,12 +161,30 @@ drogon::Task<void> SchedulerService::runTaskAsync(bool immediate) {
         snprintf(progressTimeStr, sizeof(progressTimeStr), "%02d:%02d",
                  progressMin, progressSec);
 
+        // 格式化总时长 (mm:ss)
+        int totalSec = task.totalDuration / 1000;
+        int totalMin = totalSec / 60;
+        totalSec = totalSec % 60;
+        char totalTimeStr[16];
+        snprintf(totalTimeStr, sizeof(totalTimeStr), "%02d:%02d", totalMin,
+                 totalSec);
+
+        // 格式化进度百分比
+        char progressPercentStr[16];
+        if (task.progress >= 0) {
+          snprintf(progressPercentStr, sizeof(progressPercentStr), "%.1f%%",
+                   task.progress);
+        } else {
+          snprintf(progressPercentStr, sizeof(progressPercentStr), "N/A");
+        }
+
         // 格式化速度倍率
         char speedStr[16];
         snprintf(speedStr, sizeof(speedStr), "%.2fx", task.speed);
 
         LOG_DEBUG << "  - [" << taskTypeStr << "] " << filesStr
-                  << " | 进度: " << progressTimeStr
+                  << " | 进度: " << progressPercentStr << " ("
+                  << progressTimeStr << "/" << totalTimeStr << ")"
                   << " | fps: " << task.progressFps << " | 速度: " << speedStr;
       }
     }

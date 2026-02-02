@@ -55,6 +55,8 @@ FfmpegTaskResult FfmpegTaskProcDetail::getProcessResult() {
     result.progressTime = pipe->time;
     result.progressFps = pipe->fps;
     result.progressBitrate = pipe->bitrate;
+    result.totalDuration = pipe->totalDuration;
+    result.progress = pipe->progress;
     // 计算速度倍率：已处理时长 / 实际耗时
     if (startTime > 0) {
       auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -74,17 +76,32 @@ FfmpegTaskResult FfmpegTaskProcDetail::getProcessResult() {
     result.progressFps = 0;
     result.progressBitrate = 0;
     result.speed = 0.0;
+    result.totalDuration = totalDuration_.load();
+    result.progress = -1.0;
   }
 
   return result;
 }
 
+void FfmpegTaskProcDetail::setPid(pid_t pid) { pid_ = pid; }
+
+pid_t FfmpegTaskProcDetail::getPid() const { return pid_.load(); }
+
+void FfmpegTaskProcDetail::setTotalDuration(int duration) {
+  totalDuration_ = duration;
+}
+
+int FfmpegTaskProcDetail::getTotalDuration() const {
+  return totalDuration_.load();
+}
+
 void FfmpegTaskProcDetail::cancel() {
   cancelled_ = true;
-  // TODO: 终止FFmpeg进程
-  // 需要在FfmpegPipeInfo中添加进程PID和terminate方法
-  if (auto pipe = pipeInfo.get()) {
-    // pipe->terminate(); // 将来实现
+  // 终止 FFmpeg 进程
+  pid_t currentPid = pid_.load();
+  if (currentPid > 0) {
+    LOG_DEBUG << "取消任务，终止 FFmpeg 进程 " << currentPid;
+    live2mp3::utils::terminateFfmpegProcess(currentPid);
   }
 }
 
@@ -208,8 +225,15 @@ FfAsyncChannel::FfAsyncChannel(
 FfAsyncChannel::~FfAsyncChannel() { close(); }
 
 void FfAsyncChannel::close() {
-  // TODO: 补充关闭逻辑
-  // 可能需要取消等待中的任务
+  // 取消所有正在运行的任务
+  std::lock_guard<std::mutex> lock(mutex_);
+  LOG_INFO << "FfAsyncChannel::close() - 取消 " << taskMap_.size() << " 个任务";
+  for (auto &[id, task] : taskMap_) {
+    if (task) {
+      task->cancel();
+    }
+  }
+  taskMap_.clear();
 }
 
 std::vector<FfmpegTaskProcess> FfAsyncChannel::getRunningTasks() {

@@ -85,7 +85,13 @@ ConverterService::convertToMp3(const std::string &inputPath) {
 
   LOG_INFO << "Starting conversion: " << cmd;
 
-  if (live2mp3::utils::runFfmpegWithProgress(cmd)) {
+  // 获取输入文件时长用于计算进度百分比
+  int totalDuration = live2mp3::utils::getMediaDuration(inputPath);
+  if (totalDuration < 0) {
+    totalDuration = 0;
+  }
+
+  if (live2mp3::utils::runFfmpegWithProgress(cmd, nullptr, totalDuration)) {
     LOG_INFO << "Conversion successful: " << outputPath;
 
     // Handle source file deletion based on per-root settings
@@ -247,7 +253,14 @@ std::optional<std::string> ConverterService::convertToAv1Mp4(
   LOG_INFO << "开始 AV1 转换: " << inputPath << " -> " << writingPath
            << " (临时文件)";
 
-  if (live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback)) {
+  // 获取输入文件时长用于计算进度百分比
+  int totalDuration = live2mp3::utils::getMediaDuration(inputPath);
+  if (totalDuration < 0) {
+    LOG_WARN << "无法获取媒体时长，进度百分比将不可用: " << inputPath;
+    totalDuration = 0;
+  }
+
+  if (live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback, totalDuration)) {
     // 转换成功，重命名为最终文件名
     try {
       fs::rename(writingPath, outputPath);
@@ -314,7 +327,14 @@ std::optional<std::string> ConverterService::extractMp3FromVideo(
   LOG_INFO << "开始提取 MP3: " << videoPath << " -> " << writingPath
            << " (临时文件)";
 
-  if (live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback)) {
+  // 获取输入文件时长用于计算进度百分比
+  int totalDuration = live2mp3::utils::getMediaDuration(videoPath);
+  if (totalDuration < 0) {
+    LOG_WARN << "无法获取媒体时长，进度百分比将不可用: " << videoPath;
+    totalDuration = 0;
+  }
+
+  if (live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback, totalDuration)) {
     // 提取成功，重命名为最终文件名
     try {
       fs::rename(writingPath, outputPath);

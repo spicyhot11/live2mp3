@@ -92,6 +92,8 @@ struct FfmpegTaskProcess : public FfmpegTaskBase {
   int progressFps;     ///< 当前处理帧率
   int progressBitrate; ///< 当前处理码率 (kbits/s)
   double speed;        ///< 处理速度倍率（相对于实时）
+  int totalDuration;   ///< 输入文件总时长（毫秒），0表示未知
+  double progress;     ///< 进度百分比（0.0-100.0），-1表示未知
 };
 
 /**
@@ -114,6 +116,26 @@ public:
   void setPipeInfo(const live2mp3::utils::FfmpegPipeInfo &pipeInfo);
 
   std::shared_ptr<live2mp3::utils::FfmpegPipeInfo> getPipeInfo();
+
+  /**
+   * @brief 设置当前 FFmpeg 进程 PID
+   */
+  void setPid(pid_t pid);
+
+  /**
+   * @brief 获取当前 FFmpeg 进程 PID
+   */
+  pid_t getPid() const;
+
+  /**
+   * @brief 设置输入文件总时长
+   */
+  void setTotalDuration(int duration);
+
+  /**
+   * @brief 获取输入文件总时长
+   */
+  int getTotalDuration() const;
 
   /**
    * @brief 取消任务
@@ -206,6 +228,16 @@ private:
    * @brief 取消标志
    */
   std::atomic<bool> cancelled_{false};
+
+  /**
+   * @brief 当前 FFmpeg 进程 PID
+   */
+  std::atomic<pid_t> pid_{0};
+
+  /**
+   * @brief 输入文件总时长（毫秒）
+   */
+  std::atomic<int> totalDuration_{0};
 };
 
 /**
