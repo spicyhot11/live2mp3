@@ -250,4 +250,34 @@ public:
    * @param filepath 刚变为 stable 状态的文件路径
    */
   void resolveDuplicateExtensions(const std::string &filepath);
+
+private:
+  /**
+   * @brief 启动时清理操作
+   *
+   * 恢复 processing 状态的记录，清理临时文件和 _writing 文件
+   */
+  void cleanupOnStartup();
+
+  /**
+   * @brief 恢复 processing 状态的记录
+   *
+   * 将数据库中所有 processing 状态的记录恢复为 stable（如果文件存在）
+   * 或删除记录（如果文件不存在）
+   */
+  void recoverProcessingRecords();
+
+  /**
+   * @brief 清理临时目录
+   *
+   * 清理 /tmp 目录中的所有文件
+   */
+  void cleanupTempDirectory();
+
+  /**
+   * @brief 清理输出目录中的 _writing 文件
+   *
+   * @param outputRoot 输出根目录路径
+   */
+  void cleanupWritingFiles(const std::string &outputRoot);
 };

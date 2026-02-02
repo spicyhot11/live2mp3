@@ -36,7 +36,9 @@
         {
             "name": "PendingFileService",
             "config": {},
-            "dependencies": []
+            "dependencies": [
+                "ConfigService"
+            ]
         },
         {
             "name": "ConverterService",

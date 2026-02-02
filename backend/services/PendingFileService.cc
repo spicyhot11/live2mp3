@@ -1,4 +1,5 @@
 #include "PendingFileService.h"
+#include "ConfigService.h"
 #include "DatabaseService.h"
 #include <drogon/drogon.h>
 #include <filesystem>
@@ -20,6 +21,8 @@ void to_json(nlohmann::json &j, const PendingFile &p) {
 
 void PendingFileService::initAndStart(const Json::Value &config) {
   LOG_INFO << "PendingFileService initialized";
+  // 启动时清理操作
+  cleanupOnStartup();
 }
 
 void PendingFileService::shutdown() {}
@@ -880,4 +883,199 @@ void PendingFileService::resolveDuplicateExtensions(
       markAsDeprecated(file.filepath);
     }
   }
+}
+
+void PendingFileService::cleanupOnStartup() {
+  LOG_INFO << "[cleanupOnStartup] 开始启动清理操作...";
+
+  // 1. 恢复 processing 状态的记录
+  recoverProcessingRecords();
+
+  // 2. 清理临时目录
+  cleanupTempDirectory();
+
+  // 3. 清理输出目录中的 _writing 文件
+  auto configService = drogon::app().getPlugin<ConfigService>();
+  if (configService) {
+    AppConfig cfg = configService->getConfig();
+    cleanupWritingFiles(cfg.output.output_root);
+  } else {
+    LOG_WARN
+        << "[cleanupOnStartup] 无法获取 ConfigService，跳过 _writing 文件清理";
+  }
+
+  LOG_INFO << "[cleanupOnStartup] 启动清理操作完成";
+}
+
+void PendingFileService::recoverProcessingRecords() {
+  sqlite3 *db = DatabaseService::getInstance().getDb();
+  if (!db) {
+    LOG_ERROR << "[recoverProcessingRecords] 数据库不可用";
+    return;
+  }
+
+  // 查询所有 processing 状态的记录
+  std::string sql =
+      "SELECT id, filepath FROM pending_files WHERE status = 'processing'";
+  sqlite3_stmt *stmt;
+
+  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
+    LOG_ERROR << "[recoverProcessingRecords] 查询失败: " << sqlite3_errmsg(db);
+    return;
+  }
+
+  struct ProcessingRecord {
+    int id;
+    std::string filepath;
+  };
+  std::vector<ProcessingRecord> records;
+
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    ProcessingRecord rec;
+    rec.id = sqlite3_column_int(stmt, 0);
+    rec.filepath = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+    records.push_back(rec);
+  }
+  sqlite3_finalize(stmt);
+
+  if (records.empty()) {
+    LOG_INFO << "[recoverProcessingRecords] 没有需要恢复的 processing 记录";
+    return;
+  }
+
+  LOG_INFO << "[recoverProcessingRecords] 发现 " << records.size()
+           << " 条 processing 记录，开始恢复...";
+
+  int recoveredCount = 0;
+  int deletedCount = 0;
+
+  for (const auto &rec : records) {
+    // 检查文件是否存在
+    std::error_code ec;
+    bool fileExists = fs::exists(rec.filepath, ec);
+
+    if (ec) {
+      LOG_WARN << "[recoverProcessingRecords] 检查文件存在性失败: "
+               << rec.filepath << ", 错误: " << ec.message();
+      continue;
+    }
+
+    if (fileExists) {
+      // 文件存在，恢复为 stable 状态
+      std::string updateSql =
+          "UPDATE pending_files SET status = 'stable', "
+          "updated_at = datetime('now', 'localtime') WHERE id = ?";
+      sqlite3_stmt *updateStmt;
+
+      if (sqlite3_prepare_v2(db, updateSql.c_str(), -1, &updateStmt, 0) ==
+          SQLITE_OK) {
+        sqlite3_bind_int(updateStmt, 1, rec.id);
+        if (sqlite3_step(updateStmt) == SQLITE_DONE) {
+          LOG_INFO << "[recoverProcessingRecords] 恢复为 stable: "
+                   << rec.filepath;
+          recoveredCount++;
+        } else {
+          LOG_ERROR << "[recoverProcessingRecords] 更新失败: " << rec.filepath;
+        }
+        sqlite3_finalize(updateStmt);
+      }
+    } else {
+      // 文件不存在，删除记录
+      std::string deleteSql = "DELETE FROM pending_files WHERE id = ?";
+      sqlite3_stmt *deleteStmt;
+
+      if (sqlite3_prepare_v2(db, deleteSql.c_str(), -1, &deleteStmt, 0) ==
+          SQLITE_OK) {
+        sqlite3_bind_int(deleteStmt, 1, rec.id);
+        if (sqlite3_step(deleteStmt) == SQLITE_DONE) {
+          LOG_WARN << "[recoverProcessingRecords] 文件不存在，删除记录: "
+                   << rec.filepath;
+          deletedCount++;
+        } else {
+          LOG_ERROR << "[recoverProcessingRecords] 删除失败: " << rec.filepath;
+        }
+        sqlite3_finalize(deleteStmt);
+      }
+    }
+  }
+
+  LOG_INFO << "[recoverProcessingRecords] 恢复完成: 恢复 " << recoveredCount
+           << " 条，删除 " << deletedCount << " 条";
+}
+
+void PendingFileService::cleanupTempDirectory() {
+  const std::string tmpDir = "/tmp";
+  std::error_code ec;
+
+  if (!fs::exists(tmpDir, ec) || !fs::is_directory(tmpDir, ec)) {
+    LOG_WARN << "[cleanupTempDirectory] /tmp 目录不存在或不是目录";
+    return;
+  }
+
+  LOG_INFO << "[cleanupTempDirectory] 开始清理 /tmp 目录...";
+
+  int deletedCount = 0;
+  for (const auto &entry : fs::directory_iterator(tmpDir, ec)) {
+    if (ec) {
+      LOG_WARN << "[cleanupTempDirectory] 遍历目录失败: " << ec.message();
+      break;
+    }
+
+    if (entry.is_regular_file(ec)) {
+      std::error_code removeEc;
+      fs::remove(entry.path(), removeEc);
+      if (!removeEc) {
+        LOG_DEBUG << "[cleanupTempDirectory] 删除: " << entry.path().string();
+        deletedCount++;
+      } else {
+        LOG_WARN << "[cleanupTempDirectory] 删除失败: " << entry.path().string()
+                 << ", 错误: " << removeEc.message();
+      }
+    }
+  }
+
+  LOG_INFO << "[cleanupTempDirectory] 清理完成，删除 " << deletedCount
+           << " 个文件";
+}
+
+void PendingFileService::cleanupWritingFiles(const std::string &outputRoot) {
+  std::error_code ec;
+
+  if (!fs::exists(outputRoot, ec) || !fs::is_directory(outputRoot, ec)) {
+    LOG_WARN << "[cleanupWritingFiles] 输出目录不存在或不是目录: "
+             << outputRoot;
+    return;
+  }
+
+  LOG_INFO << "[cleanupWritingFiles] 开始清理输出目录中的 _writing 文件: "
+           << outputRoot;
+
+  int deletedCount = 0;
+  for (const auto &entry : fs::recursive_directory_iterator(outputRoot, ec)) {
+    if (ec) {
+      LOG_WARN << "[cleanupWritingFiles] 遍历目录失败: " << ec.message();
+      break;
+    }
+
+    if (entry.is_regular_file(ec)) {
+      std::string filename = entry.path().filename().string();
+      // 检查文件名是否以 _writing 结尾（.mp4 或 .mp3 之前）
+      if (filename.find("_writing.mp4") != std::string::npos ||
+          filename.find("_writing.mp3") != std::string::npos) {
+        std::error_code removeEc;
+        fs::remove(entry.path(), removeEc);
+        if (!removeEc) {
+          LOG_INFO << "[cleanupWritingFiles] 删除 _writing 文件: "
+                   << entry.path().string();
+          deletedCount++;
+        } else {
+          LOG_WARN << "[cleanupWritingFiles] 删除失败: "
+                   << entry.path().string() << ", 错误: " << removeEc.message();
+        }
+      }
+    }
+  }
+
+  LOG_INFO << "[cleanupWritingFiles] 清理完成，删除 " << deletedCount
+           << " 个 _writing 文件";
 }
