@@ -1,5 +1,5 @@
 #include "SchedulerService.h"
-#include "../utils/CoroUtils.h"
+#include "../utils/CoroUtils.hpp"
 #include "../utils/FileUtils.h"
 #include <algorithm>
 #include <drogon/drogon.h>
@@ -583,26 +583,36 @@ SchedulerService::encodeFilesToTmpAsync(const std::vector<std::string> &files,
     ConvertResult convertResult =
         co_await live2mp3::utils::awaitCallback<ConvertResult>(
             [collector](std::function<void(ConvertResult)> callback) {
-              std::unique_lock<std::mutex> lock(collector->mutex);
-              // 如果队列中已有结果，直接取出
-              if (!collector->results.empty()) {
-                auto res = std::move(collector->results.front());
-                collector->results.pop();
-                lock.unlock();
-                callback(std::move(res));
-                return;
-              }
-              // 否则在后台线程等待
-              std::thread([collector,
-                           callback = std::move(callback)]() mutable {
+              auto *loop = trantor::EventLoop::getEventLoopOfCurrentThread();
+              if (!loop)
+                loop = drogon::app().getLoop(); // 保底
+
+              // 2. 定义一个递归检查函数
+              // 使用 shared_ptr 是为了让 lambda
+              // 能捕获它自己（解决递归生命周期问题）
+              auto checker = std::make_shared<std::function<void()>>();
+
+              *checker = [collector, callback, loop, checker]() mutable {
                 std::unique_lock<std::mutex> lock(collector->mutex);
-                collector->cv.wait(lock,
-                                   [&] { return !collector->results.empty(); });
-                auto res = std::move(collector->results.front());
-                collector->results.pop();
+
+                // A. 查到了：取出数据，触发回调，结束递归
+                if (!collector->results.empty()) {
+                  auto res = std::move(collector->results.front());
+                  collector->results.pop();
+                  lock.unlock();
+                  callback(std::move(res)); // 唤醒协程
+                  return;
+                }
+
+                // B. 没查到：解锁，并在 10ms 后让 Loop 再次调用我
                 lock.unlock();
-                callback(std::move(res));
-              }).detach();
+
+                // 注意：这里把 checker 再次传给 lambda，延长生命周期
+                loop->runAfter(0.01, [checker]() { (*checker)(); });
+              };
+
+              // 3. 立即启动第一次检查
+              (*checker)();
             });
 
     collected++;

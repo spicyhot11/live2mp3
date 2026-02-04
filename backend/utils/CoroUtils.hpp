@@ -101,4 +101,47 @@ template <typename T> FutureAwaiter<T> awaitFuture(std::future<T> &&future) {
   return FutureAwaiter<T>(std::move(future));
 }
 
+
+template <typename T> class CallbackAwaiter {
+public:
+  using CallbackType = std::function<void(T)>;
+  using InitiatorType = std::function<void(CallbackType)>;
+
+  explicit CallbackAwaiter(InitiatorType initiator)
+      : initiator_(std::move(initiator)) {}
+
+  bool await_ready() const noexcept { return false; }
+
+  void await_suspend(std::coroutine_handle<> handle) {
+    initiator_([this, handle](T result) mutable {
+      result_ = std::move(result);
+      handle.resume();
+    });
+  }
+
+  T await_resume() { return std::move(result_); }
+
+private:
+  InitiatorType initiator_;
+  T result_;
+};
+
+/**
+ * awaitCallback - 将回调式操作转换为 co_await 可等待对象
+ *
+ * @tparam T 回调返回的类型
+ * @param initiator 接受回调函数的初始化器
+ * @return CallbackAwaiter<T>
+ *
+ * 使用示例:
+ *   auto result = co_await awaitCallback<int>([](std::function<void(int)> cb)
+ * { someAsyncOp([cb](int val) { cb(val); });
+ *   });
+ */
+template <typename T>
+CallbackAwaiter<T>
+awaitCallback(typename CallbackAwaiter<T>::InitiatorType initiator) {
+  return CallbackAwaiter<T>(std::move(initiator));
+}
+
 } // namespace live2mp3::utils
