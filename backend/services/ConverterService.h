@@ -31,7 +31,10 @@ public:
    * @return std::optional<std::string>
    * 转换成功返回输出文件路径，失败返回nullopt
    */
-  std::optional<std::string> convertToMp3(const std::string &inputPath);
+  std::optional<std::string>
+  convertToMp3(const std::string &inputPath,
+               live2mp3::utils::CancelCheckCallback cancelCheck = nullptr,
+               std::function<void(pid_t)> pidCallback = nullptr);
 
   /**
    * @brief 将视频文件转换为AV1编码的MP4
@@ -44,7 +47,9 @@ public:
    */
   std::optional<std::string> convertToAv1Mp4(
       const std::string &inputPath, const std::string &outputDir = "",
-      live2mp3::utils::FfmpegProgressCallback progressCallback = nullptr);
+      live2mp3::utils::FfmpegProgressCallback progressCallback = nullptr,
+      live2mp3::utils::CancelCheckCallback cancelCheck = nullptr,
+      std::function<void(pid_t)> pidCallback = nullptr);
 
   /**
    * @brief 从视频文件中提取MP3
@@ -58,7 +63,9 @@ public:
    */
   std::optional<std::string> extractMp3FromVideo(
       const std::string &videoPath, const std::string &outputDir = "",
-      live2mp3::utils::FfmpegProgressCallback progressCallback = nullptr);
+      live2mp3::utils::FfmpegProgressCallback progressCallback = nullptr,
+      live2mp3::utils::CancelCheckCallback cancelCheck = nullptr,
+      std::function<void(pid_t)> pidCallback = nullptr);
 
   /**
    * @brief 获取临时目录使用量(字节)

@@ -73,9 +73,10 @@ bool terminateFfmpegProcess(pid_t pid) {
     return false;
   }
 
-  // 先发送 SIGTERM 让进程优雅退出
-  if (kill(pid, SIGTERM) == 0) {
-    LOG_DEBUG << "已向 FFmpeg 进程 " << pid << " 发送 SIGTERM 信号";
+  // 使用 kill(-pid, ...) 向整个进程组发送信号
+  // 先发送 SIGTERM 让进程组优雅退出
+  if (kill(-pid, SIGTERM) == 0) {
+    LOG_DEBUG << "已向 FFmpeg 进程组 " << pid << " 发送 SIGTERM 信号";
 
     // 等待一小段时间让进程退出
     for (int i = 0; i < 10; ++i) {
@@ -90,7 +91,7 @@ bool terminateFfmpegProcess(pid_t pid) {
 
     // 如果还没退出，发送 SIGKILL 强制终止
     LOG_WARN << "FFmpeg 进程 " << pid << " 未响应 SIGTERM，发送 SIGKILL";
-    if (kill(pid, SIGKILL) == 0) {
+    if (kill(-pid, SIGKILL) == 0) {
       waitpid(pid, nullptr, 0); // 回收僵尸进程
       return true;
     }
@@ -149,7 +150,8 @@ FfmpegPipeInfo parseFfmpegProgressLine(const std::string &line) {
 
 bool runFfmpegWithProgress(const std::string &cmd,
                            FfmpegProgressCallback callback, int totalDuration,
-                           CancelCheckCallback cancelCheck, pid_t *outPid) {
+                           CancelCheckCallback cancelCheck, pid_t *outPid,
+                           std::function<void(pid_t)> onPidAvailable) {
   // 创建管道用于读取子进程输出
   int pipefd[2];
   if (pipe(pipefd) == -1) {
@@ -168,6 +170,10 @@ bool runFfmpegWithProgress(const std::string &cmd,
   if (pid == 0) {
     // 子进程
     close(pipefd[0]); // 关闭读端
+
+    // 创建新的进程组，使子进程成为组长
+    // 这样 kill(-pid, ...) 可以杀死整个进程树
+    setpgid(0, 0);
 
     // 重定向 stdout 和 stderr 到管道写端
     dup2(pipefd[1], STDOUT_FILENO);
@@ -190,6 +196,11 @@ bool runFfmpegWithProgress(const std::string &cmd,
   }
 
   LOG_DEBUG << "FFmpeg 进程已启动，PID: " << pid;
+
+  // 立即通知 PID
+  if (onPidAvailable) {
+    onPidAvailable(pid);
+  }
 
   // 设置非阻塞读取
   int flags = fcntl(pipefd[0], F_GETFL, 0);

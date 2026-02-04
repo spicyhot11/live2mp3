@@ -38,7 +38,9 @@ public:
    */
   std::optional<std::string> mergeVideoFiles(
       const std::vector<std::string> &files, const std::string &outputDir,
-      live2mp3::utils::FfmpegProgressCallback progressCallback = nullptr);
+      live2mp3::utils::FfmpegProgressCallback progressCallback = nullptr,
+      live2mp3::utils::CancelCheckCallback cancelCheck = nullptr,
+      std::function<void(pid_t)> pidCallback = nullptr);
 
   /**
    * @brief 从文件名解析时间

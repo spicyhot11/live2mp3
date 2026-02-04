@@ -79,7 +79,9 @@ std::string MergerService::parseTitle(const std::string &filename) {
 
 std::optional<std::string> MergerService::mergeVideoFiles(
     const std::vector<std::string> &files, const std::string &outputDir,
-    live2mp3::utils::FfmpegProgressCallback progressCallback) {
+    live2mp3::utils::FfmpegProgressCallback progressCallback,
+    live2mp3::utils::CancelCheckCallback cancelCheck,
+    std::function<void(pid_t)> pidCallback) {
   if (files.empty())
     return std::nullopt;
 
@@ -131,7 +133,8 @@ std::optional<std::string> MergerService::mergeVideoFiles(
     totalDuration = 0;
   }
 
-  bool success = live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback, totalDuration);
+  bool success = live2mp3::utils::runFfmpegWithProgress(
+      cmd, progressCallback, totalDuration, cancelCheck, nullptr, pidCallback);
 
   // 清理列表文件
   if (fs::exists(listPath)) {

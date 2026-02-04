@@ -87,7 +87,8 @@ bool runFfmpegWithProgress(const std::string &cmd,
                            FfmpegProgressCallback callback = nullptr,
                            int totalDuration = 0,
                            CancelCheckCallback cancelCheck = nullptr,
-                           pid_t *outPid = nullptr);
+                           pid_t *outPid = nullptr,
+                           std::function<void(pid_t)> onPidAvailable = nullptr);
 
 /**
  * @brief 终止 FFmpeg 进程

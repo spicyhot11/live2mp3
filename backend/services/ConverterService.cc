@@ -51,7 +51,9 @@ static bool checkDeleteRule(const std::string &subDirName,
 }
 
 std::optional<std::string>
-ConverterService::convertToMp3(const std::string &inputPath) {
+ConverterService::convertToMp3(const std::string &inputPath,
+                               live2mp3::utils::CancelCheckCallback cancelCheck,
+                               std::function<void(pid_t)> pidCallback) {
   // 0. Check History
   std::string fingerprint =
       live2mp3::utils::calculateFileFingerprint(inputPath);
@@ -91,7 +93,8 @@ ConverterService::convertToMp3(const std::string &inputPath) {
     totalDuration = 0;
   }
 
-  if (live2mp3::utils::runFfmpegWithProgress(cmd, nullptr, totalDuration)) {
+  if (live2mp3::utils::runFfmpegWithProgress(
+          cmd, nullptr, totalDuration, cancelCheck, nullptr, pidCallback)) {
     LOG_INFO << "Conversion successful: " << outputPath;
 
     // Handle source file deletion based on per-root settings
@@ -210,7 +213,9 @@ ConverterService::determineOutputPathWithExt(const std::string &inputPath,
 
 std::optional<std::string> ConverterService::convertToAv1Mp4(
     const std::string &inputPath, const std::string &outputDir,
-    live2mp3::utils::FfmpegProgressCallback progressCallback) {
+    live2mp3::utils::FfmpegProgressCallback progressCallback,
+    live2mp3::utils::CancelCheckCallback cancelCheck,
+    std::function<void(pid_t)> pidCallback) {
   auto config = configServicePtr->getConfig();
 
   // 确定输出路径
@@ -260,7 +265,9 @@ std::optional<std::string> ConverterService::convertToAv1Mp4(
     totalDuration = 0;
   }
 
-  if (live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback, totalDuration)) {
+  if (live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback,
+                                             totalDuration, cancelCheck,
+                                             nullptr, pidCallback)) {
     // 转换成功，重命名为最终文件名
     try {
       fs::rename(writingPath, outputPath);
@@ -287,7 +294,9 @@ std::optional<std::string> ConverterService::convertToAv1Mp4(
 
 std::optional<std::string> ConverterService::extractMp3FromVideo(
     const std::string &videoPath, const std::string &outputDir,
-    live2mp3::utils::FfmpegProgressCallback progressCallback) {
+    live2mp3::utils::FfmpegProgressCallback progressCallback,
+    live2mp3::utils::CancelCheckCallback cancelCheck,
+    std::function<void(pid_t)> pidCallback) {
   auto config = configServicePtr->getConfig();
 
   // 确定输出路径
@@ -334,7 +343,9 @@ std::optional<std::string> ConverterService::extractMp3FromVideo(
     totalDuration = 0;
   }
 
-  if (live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback, totalDuration)) {
+  if (live2mp3::utils::runFfmpegWithProgress(cmd, progressCallback,
+                                             totalDuration, cancelCheck,
+                                             nullptr, pidCallback)) {
     // 提取成功，重命名为最终文件名
     try {
       fs::rename(writingPath, outputPath);

@@ -108,14 +108,15 @@ void FfmpegTaskProcDetail::cancel() {
 bool FfmpegTaskProcDetail::isCancelled() const { return cancelled_.load(); }
 
 void FfmpegTaskProcDetail::run() {
-  // 检查是否已被取消
   if (cancelled_) {
-    std::lock_guard<std::mutex> lock(mutexStatic_);
-    status = FfmpegTaskStatus::FAILED;
-    resultMessage = "Task cancelled before execution";
-    endTime = std::chrono::duration_cast<std::chrono::milliseconds>(
-                  std::chrono::system_clock::now().time_since_epoch())
-                  .count();
+    {
+      std::lock_guard<std::mutex> lock(mutexStatic_);
+      status = FfmpegTaskStatus::FAILED;
+      resultMessage = "Task cancelled before execution";
+      endTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch())
+                    .count();
+    }
     promise_.set_value(getProcessResult());
     return;
   }
@@ -137,12 +138,14 @@ void FfmpegTaskProcDetail::run() {
 
     // 再次检查取消标志
     if (cancelled_) {
-      std::lock_guard<std::mutex> lock(mutexStatic_);
-      status = FfmpegTaskStatus::FAILED;
-      resultMessage = "Task cancelled during execution";
-      endTime = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch())
-                    .count();
+      {
+        std::lock_guard<std::mutex> lock(mutexStatic_);
+        status = FfmpegTaskStatus::FAILED;
+        resultMessage = "Task cancelled during execution";
+        endTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::system_clock::now().time_since_epoch())
+                      .count();
+      }
       promise_.set_value(getProcessResult());
       return;
     }
@@ -433,9 +436,17 @@ void FfmpegTaskService::ConvertMp4Task(
       break;
     }
 
+    // 创建取消检查回调
+    auto cancelCheck = [detail]() {
+      return detail->isCancelled() || !drogon::app().isRunning();
+    };
+
+    // 创建 PID 回调
+    auto pidCallback = [detail](pid_t pid) { detail->setPid(pid); };
+
     // 调用 ConverterService 进行转换
-    auto outputPath = converterService->convertToAv1Mp4(inputPath, outputDir,
-                                                        progressCallback);
+    auto outputPath = converterService->convertToAv1Mp4(
+        inputPath, outputDir, progressCallback, cancelCheck, pidCallback);
     if (outputPath) {
       successCount++;
       detail->setOutputFiles({*outputPath});
@@ -518,9 +529,17 @@ void FfmpegTaskService::ConvertMp3Task(
       break;
     }
 
+    // 创建取消检查回调
+    auto cancelCheck = [detail]() {
+      return detail->isCancelled() || !drogon::app().isRunning();
+    };
+
+    // 创建 PID 回调
+    auto pidCallback = [detail](pid_t pid) { detail->setPid(pid); };
+
     // 调用 ConverterService 提取 MP3
     auto outputPath = converterService->extractMp3FromVideo(
-        inputPath, outputDir, progressCallback);
+        inputPath, outputDir, progressCallback, cancelCheck, pidCallback);
     if (outputPath) {
       successCount++;
       detail->setOutputFiles({*outputPath});
@@ -585,9 +604,17 @@ void FfmpegTaskService::MergeTask(std::weak_ptr<FfmpegTaskProcDetail> item) {
     }
   };
 
+  // 创建取消检查回调
+  auto cancelCheck = [detail]() {
+    return detail->isCancelled() || !drogon::app().isRunning();
+  };
+
+  // 创建 PID 回调
+  auto pidCallback = [detail](pid_t pid) { detail->setPid(pid); };
+
   // 调用 MergerService 进行合并
-  auto outputPath =
-      mergerService->mergeVideoFiles(inputFiles, outputDir, progressCallback);
+  auto outputPath = mergerService->mergeVideoFiles(
+      inputFiles, outputDir, progressCallback, cancelCheck, pidCallback);
   if (outputPath) {
     detail->setOutputFiles({*outputPath});
     LOG_INFO << "MergeTask: 合并成功 " << inputFiles.size() << " 个文件 -> "
