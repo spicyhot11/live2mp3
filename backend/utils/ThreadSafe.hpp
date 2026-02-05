@@ -25,16 +25,15 @@ public:
   /**
    * @brief 获取当前数据的快照
    *
-   * 利用 atomic 的原子加载，获取当前数据的 shared_ptr。
-   * 这是一个无锁操作，非常快。
+   * 利用 mutex 保护，获取当前数据的 shared_ptr。
    * 返回的指针保证在持有期间数据有效，即使其他线程进行了 set 操作。
    *
    * @return std::shared_ptr<const T> 指向数据的常量指针
    */
   std::shared_ptr<const T> get() const {
-    auto ptr = data_.load(); // 原子读取指针
-    if (ptr) {
-      return ptr;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (data_) {
+      return data_;
     }
     return getDefaultPtr();
   }
@@ -42,7 +41,7 @@ public:
   /**
    * @brief 更新数据
    *
-   * 创建新的数据对象，并原子地“替换”掉旧指针。
+   * 创建新的数据对象，并使用 mutex 保护替换掉旧指针。
    * 这是一个写时复制（CoW）风格的操作。
    * 旧数据的内存会在最后一个 reader 释放 shared_ptr 后自动回收。
    *
@@ -50,7 +49,8 @@ public:
    */
   void set(T value) {
     auto new_ptr = std::make_shared<const T>(std::move(value));
-    data_.store(new_ptr); // 原子替换，旧指针如果没有其他地方引用，会自动释放
+    std::lock_guard<std::mutex> lock(mutex_);
+    data_ = new_ptr;
   }
 
 private:
@@ -71,10 +71,9 @@ private:
     return kGenericDefault;
   }
 
-  // 用于存储数据的原子指针
-  // 使用 shared_ptr 是为了实现写时复制 (Copy-On-Write) 语义，
-  // 原子操作保证了多线程下的读写安全。
-  std::atomic<std::shared_ptr<const T>> data_ = nullptr;
+  // 使用 mutex 保护数据指针
+  mutable std::mutex mutex_;
+  std::shared_ptr<const T> data_ = nullptr;
 };
 
 // 为常用的 string 提供一个别名
