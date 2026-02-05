@@ -44,6 +44,8 @@ struct ScannerConfig {
 struct OutputConfig {
   std::string output_root;
   bool keep_original;
+  std::string video_extension = ".mp4";
+  std::string audio_extension = ".mp3";
 };
 
 /**

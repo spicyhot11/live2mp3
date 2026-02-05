@@ -197,7 +197,9 @@ ConverterService::convertToMp3(const std::string &inputPath,
 std::string
 ConverterService::determineOutputPath(const std::string &inputPath,
                                       const std::string &outputRoot) {
-  return determineOutputPathWithExt(inputPath, outputRoot, ".mp3");
+  auto config = configServicePtr->getConfig();
+  return determineOutputPathWithExt(inputPath, outputRoot,
+                                    config.output.audio_extension);
 }
 
 std::string
@@ -220,16 +222,17 @@ std::optional<std::string> ConverterService::convertToAv1Mp4(
 
   // 确定输出路径
   std::string outputPath;
+  std::string extension = config.output.video_extension;
   if (outputDir.empty()) {
     // 未指定输出目录时，使用默认逻辑（会拼接父目录名）
     std::string targetDir = config.temp.temp_dir.empty()
                                 ? config.output.output_root
                                 : config.temp.temp_dir;
-    outputPath = determineOutputPathWithExt(inputPath, targetDir, ".mp4");
+    outputPath = determineOutputPathWithExt(inputPath, targetDir, extension);
   } else {
     // 明确指定输出目录时，直接在该目录下输出
     fs::path p(inputPath);
-    std::string filename = p.stem().string() + ".mp4";
+    std::string filename = p.stem().string() + extension;
     outputPath = (fs::path(outputDir) / filename).string();
   }
 
@@ -311,14 +314,15 @@ std::optional<std::string> ConverterService::extractMp3FromVideo(
 
   // 确定输出路径
   std::string outputPath;
+  std::string extension = config.output.audio_extension;
   if (outputDir.empty()) {
     // 未指定输出目录时，使用默认逻辑（会拼接父目录名）
-    outputPath = determineOutputPathWithExt(videoPath,
-                                            config.output.output_root, ".mp3");
+    outputPath = determineOutputPathWithExt(
+        videoPath, config.output.output_root, extension);
   } else {
     // 明确指定输出目录时，直接在该目录下输出
     fs::path p(videoPath);
-    std::string filename = p.stem().string() + ".mp3";
+    std::string filename = p.stem().string() + extension;
     outputPath = (fs::path(outputDir) / filename).string();
   }
 

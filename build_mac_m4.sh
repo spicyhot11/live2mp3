@@ -80,8 +80,12 @@ cmake --build . -j$(sysctl -n hw.ncpu)
 # 6. 复制配置文件
 echo -e "${GREEN}==> [5/4] 复制配置文件...${NC}"
 mkdir -p "${PROJECT_ROOT}/bin"
-cp "${PROJECT_ROOT}/backend/user_config.toml" "${PROJECT_ROOT}/bin/"
-cp "${PROJECT_ROOT}/backend/config.json" "${PROJECT_ROOT}/bin/"
+if [ ! -f "${PROJECT_ROOT}/bin/user_config.toml" ]; then
+    cp "${PROJECT_ROOT}/backend/user_config.toml" "${PROJECT_ROOT}/bin/"
+fi
+if [ ! -f "${PROJECT_ROOT}/bin/config.json" ]; then
+    cp "${PROJECT_ROOT}/backend/config.json" "${PROJECT_ROOT}/bin/"
+fi
 
 echo -e "${GREEN}SUCCESS! 构建完成。${NC}"
 echo -e "${GREEN}可执行文件位于: ${PROJECT_ROOT}/bin/live2mp3${NC}"

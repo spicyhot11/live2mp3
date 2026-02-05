@@ -85,6 +85,9 @@ std::optional<std::string> MergerService::mergeVideoFiles(
   if (files.empty())
     return std::nullopt;
 
+  // 获取配置
+  auto config = configServicePtr->getConfig();
+
   // 单文件情况：无需合并，直接返回
   if (files.size() == 1) {
     LOG_INFO << "只有单个文件，跳过合并: " << files[0];
@@ -94,7 +97,8 @@ std::optional<std::string> MergerService::mergeVideoFiles(
   // 使用第一个文件的文件名作为基础，添加 "_merged" 后缀
   fs::path firstPath(files[0]);
   std::string stem = firstPath.stem().string();
-  std::string extension = firstPath.extension().string();
+  // 使用配置的扩展名
+  std::string extension = config.output.video_extension;
   std::string outputName = stem + "_merged" + extension;
   std::string outputPath = (fs::path(outputDir) / outputName).string();
 
@@ -122,7 +126,6 @@ std::optional<std::string> MergerService::mergeVideoFiles(
   // FFmpeg 命令：使用配置中的命令模板
   // -c copy 表示直接复制流，不重新编码（要求所有文件编码格式一致）
   // 先输出到临时文件
-  auto config = configServicePtr->getConfig();
   std::string cmdTemplate = config.ffmpeg.merge_command;
   std::string cmd;
   try {

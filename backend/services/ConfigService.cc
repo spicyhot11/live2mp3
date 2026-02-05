@@ -54,12 +54,23 @@ void from_json(const json &j, ScannerConfig &p) {
 }
 
 void to_json(json &j, const OutputConfig &p) {
-  j = json{{"output_root", p.output_root}, {"keep_original", p.keep_original}};
+  j = json{
+      {"output_root", p.output_root},
+      {"keep_original", p.keep_original},
+      {"video_extension", p.video_extension},
+      {"audio_extension", p.audio_extension},
+  };
 }
 
 void from_json(const json &j, OutputConfig &p) {
-  j.at("output_root").get_to(p.output_root);
-  j.at("keep_original").get_to(p.keep_original);
+  if (j.contains("output_root"))
+    j.at("output_root").get_to(p.output_root);
+  if (j.contains("keep_original"))
+    j.at("keep_original").get_to(p.keep_original);
+  if (j.contains("video_extension"))
+    j.at("video_extension").get_to(p.video_extension);
+  if (j.contains("audio_extension"))
+    j.at("audio_extension").get_to(p.audio_extension);
 }
 
 void to_json(json &j, const SchedulerConfig &p) {
