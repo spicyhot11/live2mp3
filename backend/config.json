@@ -73,22 +73,18 @@
         },
         {
             "name": "FfmpegTaskService",
-            "config": {
-                "maxConcurrentTasks": 2,
-                "maxWaitingTasks": 10000,
-                "taskTimeoutSeconds": 600
-            },
+            "config": {},
             "dependencies": [
-                "CommonThreadService"
+                "CommonThreadService",
+                "ConfigService"
             ]
         },
         {
             "name": "CommonThreadService",
-            "config": {
-                "threadCount": 8,
-                "name": "CommonThreadPool"
-            },
-            "dependencies": []
+            "config": {},
+            "dependencies": [
+                "ConfigService"
+            ]
         }
     ]
 }

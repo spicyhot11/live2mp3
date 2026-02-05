@@ -1,16 +1,26 @@
 #include "CommonThreadService.h"
+#include "ConfigService.h"
 #include <drogon/drogon.h>
 
 void CommonThreadService::initAndStart(const Json::Value &config) {
-  // 从配置读取线程数量
-  if (config.isMember("threadCount") && config["threadCount"].isInt()) {
-    threadCount_ = static_cast<size_t>(config["threadCount"].asInt());
+  // 获取 ConfigService
+  configService_ = drogon::app().getSharedPlugin<ConfigService>();
+  if (!configService_) {
+    LOG_ERROR << "CommonThreadService: ConfigService not found, using defaults";
+    // Defaults are already set in members if not overwritten, or we can use
+    // hardcoded defaults here
+  } else {
+    auto appConfig = configService_->getConfig();
+    threadCount_ = appConfig.common_thread.threadCount;
+    name_ = appConfig.common_thread.name;
+    LOG_INFO << "CommonThreadService: Loaded config from ConfigService";
   }
 
-  // 从配置读取线程池名称
-  if (config.isMember("name") && config["name"].isString()) {
-    name_ = config["name"].asString();
-  }
+  // 兼容旧的 JSON 配置（如果 ConfigService 没准备好或者作为 fallback）
+  // 但既然我们要迁移，主要依靠 ConfigService。
+  // 如果 JSON 中明确指定了（可能是旧的 config.json 还未迁完），可以覆盖？
+  // 策略：优先使用 ConfigService (TOML)，忽略传进来的 config (JSON)，除非 TOML
+  // 没加载成功？ 实际上 ConfigService 应该在 CommonThreadService 之前初始化。
 
   // 创建 trantor 线程池
   threadPool_ =

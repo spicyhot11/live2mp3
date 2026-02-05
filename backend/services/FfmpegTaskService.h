@@ -422,4 +422,9 @@ private:
    * @brief 线程池服务
    */
   std::shared_ptr<CommonThreadService> threadServicePtr_;
+
+  /**
+   * @brief 配置服务
+   */
+  std::shared_ptr<ConfigService> configService_;
 };

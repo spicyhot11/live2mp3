@@ -78,6 +78,23 @@ struct FfmpegConfig {
 };
 
 /**
+ * @brief CommonThreadService 配置结构体
+ */
+struct CommonThreadConfig {
+  int threadCount = 8;
+  std::string name = "CommonThreadPool";
+};
+
+/**
+ * @brief FfmpegTaskService 配置结构体
+ */
+struct FfmpegTaskConfig {
+  int maxConcurrentTasks = 2;
+  int maxWaitingTasks = 10000;
+  int taskTimeoutSeconds = 600;
+};
+
+/**
  * @brief 应用全局配置结构体
  */
 struct AppConfig {
@@ -87,6 +104,8 @@ struct AppConfig {
   SchedulerConfig scheduler;
   TempConfig temp;
   FfmpegConfig ffmpeg;
+  CommonThreadConfig common_thread;
+  FfmpegTaskConfig ffmpeg_task;
 };
 
 // JSON 序列化辅助函数
@@ -104,6 +123,10 @@ void to_json(nlohmann::json &j, const TempConfig &p);
 void from_json(const nlohmann::json &j, TempConfig &p);
 void to_json(nlohmann::json &j, const FfmpegConfig &p);
 void from_json(const nlohmann::json &j, FfmpegConfig &p);
+void to_json(nlohmann::json &j, const CommonThreadConfig &p);
+void from_json(const nlohmann::json &j, CommonThreadConfig &p);
+void to_json(nlohmann::json &j, const FfmpegTaskConfig &p);
+void from_json(const nlohmann::json &j, FfmpegTaskConfig &p);
 
 /**
  * @brief 配置管理服务类

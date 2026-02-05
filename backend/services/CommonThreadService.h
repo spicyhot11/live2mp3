@@ -1,5 +1,6 @@
 #pragma once
 
+#include "services/ConfigService.h"
 #include <drogon/plugins/Plugin.h>
 #include <functional>
 #include <future>
@@ -84,4 +85,9 @@ private:
   std::unique_ptr<trantor::ConcurrentTaskQueue> threadPool_; ///< 底层线程池
   std::string name_{"CommonThreadPool"};                     ///< 线程池名称
   size_t threadCount_{4};                                    ///< 线程数量
+
+  /**
+   * @brief 配置服务
+   */
+  std::shared_ptr<ConfigService> configService_;
 };

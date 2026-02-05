@@ -1,5 +1,6 @@
 #include "FfmpegTaskService.h"
 #include "../utils/CoroUtils.hpp"
+#include "ConfigService.h"
 #include "ConverterService.h"
 #include "MergerService.h"
 #include <chrono>
@@ -335,17 +336,18 @@ void FfAsyncChannel::sendAsync(
 
 void FfmpegTaskService::initAndStart(const Json::Value &config) {
   // 读取配置
-  size_t maxConcurrent = 8; // 默认值
-  size_t maxWaiting = 100;
+  size_t maxConcurrent = 2; // 默认值
+  size_t maxWaiting = 10000;
+  // TODO: taskTimeoutSeconds use?
 
-  if (config.isMember("maxConcurrentTasks") &&
-      config["maxConcurrentTasks"].isUInt()) {
-    maxConcurrent = config["maxConcurrentTasks"].asUInt();
-  }
-
-  if (config.isMember("maxWaitingTasks") &&
-      config["maxWaitingTasks"].isUInt()) {
-    maxWaiting = config["maxWaitingTasks"].asUInt();
+  configService_ = drogon::app().getSharedPlugin<ConfigService>();
+  if (configService_) {
+    auto appConfig = configService_->getConfig();
+    maxConcurrent = appConfig.ffmpeg_task.maxConcurrentTasks;
+    maxWaiting = appConfig.ffmpeg_task.maxWaitingTasks;
+    // taskTimeoutSeconds = appConfig.ffmpeg_task.taskTimeoutSeconds;
+  } else {
+    LOG_ERROR << "FfmpegTaskService: ConfigService not found, using defaults";
   }
 
   // 获取 CommonThreadService

@@ -113,6 +113,30 @@ void from_json(const json &j, FfmpegConfig &p) {
     j.at("merge_command").get_to(p.merge_command);
 }
 
+void to_json(json &j, const CommonThreadConfig &p) {
+  j = json{{"threadCount", p.threadCount}, {"name", p.name}};
+}
+void from_json(const json &j, CommonThreadConfig &p) {
+  if (j.contains("threadCount"))
+    j.at("threadCount").get_to(p.threadCount);
+  if (j.contains("name"))
+    j.at("name").get_to(p.name);
+}
+
+void to_json(json &j, const FfmpegTaskConfig &p) {
+  j = json{{"maxConcurrentTasks", p.maxConcurrentTasks},
+           {"maxWaitingTasks", p.maxWaitingTasks},
+           {"taskTimeoutSeconds", p.taskTimeoutSeconds}};
+}
+void from_json(const json &j, FfmpegTaskConfig &p) {
+  if (j.contains("maxConcurrentTasks"))
+    j.at("maxConcurrentTasks").get_to(p.maxConcurrentTasks);
+  if (j.contains("maxWaitingTasks"))
+    j.at("maxWaitingTasks").get_to(p.maxWaitingTasks);
+  if (j.contains("taskTimeoutSeconds"))
+    j.at("taskTimeoutSeconds").get_to(p.taskTimeoutSeconds);
+}
+
 // ============================================================
 // TOML Helper: Extract string array from TOML array
 // ============================================================
@@ -314,6 +338,24 @@ void ConfigService::loadConfig() {
       LOG_DEBUG << "merge_command: " << currentConfig_.ffmpeg.merge_command;
     }
 
+    // CommonThread config
+    if (auto ct = tbl["common_thread"].as_table()) {
+      currentConfig_.common_thread.threadCount =
+          (*ct)["threadCount"].value_or(8);
+      currentConfig_.common_thread.name =
+          (*ct)["name"].value_or("CommonThreadPool");
+    }
+
+    // FfmpegTask config
+    if (auto ft = tbl["ffmpeg_task"].as_table()) {
+      currentConfig_.ffmpeg_task.maxConcurrentTasks =
+          (*ft)["maxConcurrentTasks"].value_or(2);
+      currentConfig_.ffmpeg_task.maxWaitingTasks =
+          (*ft)["maxWaitingTasks"].value_or(10000);
+      currentConfig_.ffmpeg_task.taskTimeoutSeconds =
+          (*ft)["taskTimeoutSeconds"].value_or(600);
+    }
+
     // Server port (optional in user config)
     if (tbl.contains("server_port")) {
       currentConfig_.server_port = tbl["server_port"].value_or(8080);
@@ -410,6 +452,22 @@ void ConfigService::saveConfig() {
                     {"audio_convert_command",
                      currentConfig_.ffmpeg.audio_convert_command},
                     {"merge_command", currentConfig_.ffmpeg.merge_command}});
+
+    // CommonThread section
+    tbl.insert_or_assign(
+        "common_thread",
+        toml::table{{"threadCount", currentConfig_.common_thread.threadCount},
+                    {"name", currentConfig_.common_thread.name}});
+
+    // FfmpegTask section
+    tbl.insert_or_assign(
+        "ffmpeg_task",
+        toml::table{
+            {"maxConcurrentTasks",
+             currentConfig_.ffmpeg_task.maxConcurrentTasks},
+            {"maxWaitingTasks", currentConfig_.ffmpeg_task.maxWaitingTasks},
+            {"taskTimeoutSeconds",
+             currentConfig_.ffmpeg_task.taskTimeoutSeconds}});
 
     // Server port
     tbl.insert("server_port", currentConfig_.server_port);
