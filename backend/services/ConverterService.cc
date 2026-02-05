@@ -4,7 +4,7 @@
 #include "PendingFileService.h"
 #include <drogon/drogon.h>
 #include <filesystem>
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <regex>
 
 namespace fs = std::filesystem;
@@ -248,12 +248,22 @@ std::optional<std::string> ConverterService::convertToAv1Mp4(
     return std::nullopt;
   }
 
-  // FFmpeg 命令：使用 SVT-AV1 编码器进行 AV1 转码
-  // CRF 30 提供较好的质量/大小平衡
+  // FFmpeg 命令：使用配置中的命令模板
   // 先输出到临时文件
-  std::string cmd = fmt::format("ffmpeg -y -i \"{}\" -c:v libsvtav1 -crf 30 "
-                                "-preset 6 -c:a aac -b:a 128k \"{}\" 2>&1",
-                                inputPath, writingPath);
+  std::string cmdTemplate = config.ffmpeg.video_convert_command;
+  std::string cmd;
+  try {
+    cmd = fmt::format(fmt::runtime(cmdTemplate), fmt::arg("input", inputPath),
+                      fmt::arg("output", writingPath));
+    // Check if redirect is already in template, if not add it?
+    // User template usually doesn't include 2>&1, but our default did.
+    // The default in ConfigService includes 2>&1.
+    // If user removes it, we might lose logs.
+    // But we should follow the config.
+  } catch (const std::exception &e) {
+    LOG_ERROR << "Failed to format video convert command: " << e.what();
+    return std::nullopt;
+  }
 
   LOG_INFO << "开始 AV1 转换: " << inputPath << " -> " << writingPath
            << " (临时文件)";
@@ -327,11 +337,17 @@ std::optional<std::string> ConverterService::extractMp3FromVideo(
     return std::nullopt;
   }
 
-  // FFmpeg 命令：提取音频并转为 MP3
+  // FFmpeg 命令：使用配置中的命令模板
   // 先输出到临时文件
-  std::string cmd = fmt::format(
-      "ffmpeg -y -i \"{}\" -vn -acodec libmp3lame -q:a 2 \"{}\" 2>&1",
-      videoPath, writingPath);
+  std::string cmdTemplate = config.ffmpeg.audio_convert_command;
+  std::string cmd;
+  try {
+    cmd = fmt::format(fmt::runtime(cmdTemplate), fmt::arg("input", videoPath),
+                      fmt::arg("output", writingPath));
+  } catch (const std::exception &e) {
+    LOG_ERROR << "Failed to format audio convert command: " << e.what();
+    return std::nullopt;
+  }
 
   LOG_INFO << "开始提取 MP3: " << videoPath << " -> " << writingPath
            << " (临时文件)";

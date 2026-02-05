@@ -3,7 +3,7 @@
 #include "ConfigService.h"
 #include <drogon/drogon.h>
 #include <filesystem>
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <fstream>
 #include <iomanip>
 #include <regex>
@@ -119,12 +119,19 @@ std::optional<std::string> MergerService::mergeVideoFiles(
   LOG_INFO << "开始合并 " << files.size() << " 个文件 -> " << writingPath
            << " (临时文件)";
 
-  // FFmpeg 命令：使用 concat 协议合并文件
+  // FFmpeg 命令：使用配置中的命令模板
   // -c copy 表示直接复制流，不重新编码（要求所有文件编码格式一致）
   // 先输出到临时文件
-  std::string cmd =
-      fmt::format("ffmpeg -f concat -safe 0 -i \"{}\" -c copy -y \"{}\" 2>&1",
-                  listPath, writingPath);
+  auto config = configServicePtr->getConfig();
+  std::string cmdTemplate = config.ffmpeg.merge_command;
+  std::string cmd;
+  try {
+    cmd = fmt::format(fmt::runtime(cmdTemplate), fmt::arg("input", listPath),
+                      fmt::arg("output", writingPath));
+  } catch (const std::exception &e) {
+    LOG_ERROR << "Failed to format merge command: " << e.what();
+    return std::nullopt;
+  }
 
   // 获取所有输入文件的总时长用于计算进度百分比
   int totalDuration = live2mp3::utils::getTotalMediaDuration(files);

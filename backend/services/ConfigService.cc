@@ -98,6 +98,21 @@ void from_json(const json &j, TempConfig &p) {
     j.at("size_limit_mb").get_to(p.size_limit_mb);
 }
 
+void to_json(json &j, const FfmpegConfig &p) {
+  j = json{{"video_convert_command", p.video_convert_command},
+           {"audio_convert_command", p.audio_convert_command},
+           {"merge_command", p.merge_command}};
+}
+
+void from_json(const json &j, FfmpegConfig &p) {
+  if (j.contains("video_convert_command"))
+    j.at("video_convert_command").get_to(p.video_convert_command);
+  if (j.contains("audio_convert_command"))
+    j.at("audio_convert_command").get_to(p.audio_convert_command);
+  if (j.contains("merge_command"))
+    j.at("merge_command").get_to(p.merge_command);
+}
+
 // ============================================================
 // TOML Helper: Extract string array from TOML array
 // ============================================================
@@ -234,6 +249,71 @@ void ConfigService::loadConfig() {
           (*temp)["size_limit_mb"].value_or(static_cast<int64_t>(0));
     }
 
+    // Ffmpeg config
+    if (auto ffmpeg = tbl["ffmpeg"].as_table()) {
+      currentConfig_.ffmpeg.video_convert_command =
+          (*ffmpeg)["video_convert_command"].value_or(
+              std::string("ffmpeg -y -i \"{input}\" -c:v libsvtav1 -crf 30 "
+                          "-preset 6 -c:a aac -b:a 128k \"{output}\" 2>&1"));
+      currentConfig_.ffmpeg.audio_convert_command =
+          (*ffmpeg)["audio_convert_command"].value_or(std::string(
+              "ffmpeg -y -i \"{input}\" -vn -acodec libmp3lame -q:a 2 "
+              "\"{output}\" 2>&1"));
+      currentConfig_.ffmpeg.merge_command = (*ffmpeg)["merge_command"].value_or(
+          std::string("ffmpeg -f concat -safe 0 -i \"{input}\" -c copy -y "
+                      "\"{output}\" 2>&1"));
+
+      // Validation: Check for {input} and {output} placeholders
+      auto validateCommand = [](std::string &cmd, const std::string &defaultCmd,
+                                const std::string &name) {
+        if (cmd.find("{input}") == std::string::npos ||
+            cmd.find("{output}") == std::string::npos) {
+          LOG_ERROR << "Invalid FFmpeg command format for " << name
+                    << ": missing {input} or {output} placeholder. Reverting "
+                       "to default.";
+          cmd = defaultCmd;
+        }
+        LOG_DEBUG << "FFmpeg command for " << name << ": " << cmd;
+      };
+
+      std::string defaultVideo =
+          "ffmpeg -y -i \"{input}\" -c:v libsvtav1 -crf 30 -preset 6 -c:a aac "
+          "-b:a 128k \"{output}\" 2>&1";
+      std::string defaultAudio =
+          "ffmpeg -y -i \"{input}\" -vn -acodec libmp3lame -q:a 2 \"{output}\" "
+          "2>&1";
+      std::string defaultMerge =
+          "ffmpeg -f concat -safe 0 -i \"{input}\" -c copy -y \"{output}\" "
+          "2>&1";
+
+      validateCommand(currentConfig_.ffmpeg.video_convert_command, defaultVideo,
+                      "video_convert_command");
+      validateCommand(currentConfig_.ffmpeg.audio_convert_command, defaultAudio,
+                      "audio_convert_command");
+      validateCommand(currentConfig_.ffmpeg.merge_command, defaultMerge,
+                      "merge_command");
+
+    } else {
+      // Default configurations if [ffmpeg] section is missing
+      currentConfig_.ffmpeg.video_convert_command =
+          "ffmpeg -y -i \"{input}\" -c:v libsvtav1 -crf 30 -preset 6 -c:a aac "
+          "-b:a 128k \"{output}\" 2>&1";
+      currentConfig_.ffmpeg.audio_convert_command =
+          "ffmpeg -y -i \"{input}\" -vn -acodec libmp3lame -q:a 2 \"{output}\" "
+          "2>&1";
+      currentConfig_.ffmpeg.merge_command =
+          "ffmpeg -f concat -safe 0 -i \"{input}\" -c copy -y \"{output}\" "
+          "2>&1";
+
+      LOG_DEBUG << "No [ffmpeg] section found in config. Using default FFmpeg "
+                   "commands.";
+      LOG_DEBUG << "video_convert_command: "
+                << currentConfig_.ffmpeg.video_convert_command;
+      LOG_DEBUG << "audio_convert_command: "
+                << currentConfig_.ffmpeg.audio_convert_command;
+      LOG_DEBUG << "merge_command: " << currentConfig_.ffmpeg.merge_command;
+    }
+
     // Server port (optional in user config)
     if (tbl.contains("server_port")) {
       currentConfig_.server_port = tbl["server_port"].value_or(8080);
@@ -322,6 +402,15 @@ void ConfigService::saveConfig() {
         toml::table{{"temp_dir", currentConfig_.temp.temp_dir},
                     {"size_limit_mb", currentConfig_.temp.size_limit_mb}});
 
+    // Ffmpeg section
+    tbl.insert_or_assign(
+        "ffmpeg",
+        toml::table{{"video_convert_command",
+                     currentConfig_.ffmpeg.video_convert_command},
+                    {"audio_convert_command",
+                     currentConfig_.ffmpeg.audio_convert_command},
+                    {"merge_command", currentConfig_.ffmpeg.merge_command}});
+
     // Server port
     tbl.insert("server_port", currentConfig_.server_port);
 
@@ -380,5 +469,6 @@ nlohmann::json ConfigService::toJson() const {
   j["output"] = currentConfig_.output;
   j["scheduler"] = currentConfig_.scheduler;
   j["temp"] = currentConfig_.temp;
+  j["ffmpeg"] = currentConfig_.ffmpeg;
   return j;
 }

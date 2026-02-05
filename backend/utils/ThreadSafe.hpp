@@ -1,8 +1,7 @@
 #pragma once
 #include <atomic>
 #include <coroutine>
-#include <drogon/plugins/Plugin.h>
-#include <drogon/utils/coroutine.h>
+
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -194,14 +193,14 @@ public:
       lpAwaiter->handler.resume();
   }
 
-  size_t getMaxProcCount() { 
+  size_t getMaxProcCount() {
     std::lock_guard<std::mutex> lock(procMutex_);
-    return maxProcCount_; 
+    return maxProcCount_;
   }
 
-  size_t getMaxWaitCount() { 
+  size_t getMaxWaitCount() {
     std::lock_guard<std::mutex> lock(procMutex_);
-    return maxWaitCount_; 
+    return maxWaitCount_;
   }
 
   SimpleCoroSemaphore(size_t maxProcCount, size_t maxWaitCount)

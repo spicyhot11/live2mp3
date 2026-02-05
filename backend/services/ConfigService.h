@@ -1,7 +1,7 @@
 #pragma once
 
 #include "utils/ThreadSafe.hpp"
-#include <drogon/plugins/Plugin.h>
+#include <drogon/drogon.h>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -69,6 +69,15 @@ struct TempConfig {
 };
 
 /**
+ * @brief FFmpeg 配置结构体
+ */
+struct FfmpegConfig {
+  std::string video_convert_command;
+  std::string audio_convert_command;
+  std::string merge_command;
+};
+
+/**
  * @brief 应用全局配置结构体
  */
 struct AppConfig {
@@ -77,6 +86,7 @@ struct AppConfig {
   OutputConfig output;
   SchedulerConfig scheduler;
   TempConfig temp;
+  FfmpegConfig ffmpeg;
 };
 
 // JSON 序列化辅助函数
@@ -92,6 +102,8 @@ void to_json(nlohmann::json &j, const SchedulerConfig &p);
 void from_json(const nlohmann::json &j, SchedulerConfig &p);
 void to_json(nlohmann::json &j, const TempConfig &p);
 void from_json(const nlohmann::json &j, TempConfig &p);
+void to_json(nlohmann::json &j, const FfmpegConfig &p);
+void from_json(const nlohmann::json &j, FfmpegConfig &p);
 
 /**
  * @brief 配置管理服务类
