@@ -270,9 +270,11 @@ private:
   /**
    * @brief 清理临时目录
    *
-   * 清理 /tmp 目录中的所有文件
+   * 清理输出目录下的 tmp 目录中的所有文件
+   *
+   * @param outputRoot 输出根目录路径
    */
-  void cleanupTempDirectory();
+  void cleanupTempDirectory(const std::string &outputRoot);
 
   /**
    * @brief 清理输出目录中的 _writing 文件

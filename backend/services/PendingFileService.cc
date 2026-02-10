@@ -891,17 +891,15 @@ void PendingFileService::cleanupOnStartup() {
   // 1. 恢复 processing 状态的记录
   recoverProcessingRecords();
 
-  // 2. 清理临时目录
-  cleanupTempDirectory();
-
-  // 3. 清理输出目录中的 _writing 文件
+  // 2. 清理输出目录中的临时文件和 _writing 文件
   auto configService = drogon::app().getPlugin<ConfigService>();
   if (configService) {
     AppConfig cfg = configService->getConfig();
+    cleanupTempDirectory(cfg.output.output_root);
     cleanupWritingFiles(cfg.output.output_root);
   } else {
     LOG_WARN
-        << "[cleanupOnStartup] 无法获取 ConfigService，跳过 _writing 文件清理";
+        << "[cleanupOnStartup] 无法获取 ConfigService，跳过清理操作";
   }
 
   LOG_INFO << "[cleanupOnStartup] 启动清理操作完成";
@@ -1003,16 +1001,16 @@ void PendingFileService::recoverProcessingRecords() {
            << " 条，删除 " << deletedCount << " 条";
 }
 
-void PendingFileService::cleanupTempDirectory() {
-  const std::string tmpDir = "/tmp";
+void PendingFileService::cleanupTempDirectory(const std::string &outputRoot) {
+  const std::string tmpDir = outputRoot + "/tmp";
   std::error_code ec;
 
   if (!fs::exists(tmpDir, ec) || !fs::is_directory(tmpDir, ec)) {
-    LOG_WARN << "[cleanupTempDirectory] /tmp 目录不存在或不是目录";
+    LOG_WARN << "[cleanupTempDirectory] 临时目录不存在或不是目录: " << tmpDir;
     return;
   }
 
-  LOG_INFO << "[cleanupTempDirectory] 开始清理 /tmp 目录...";
+  LOG_INFO << "[cleanupTempDirectory] 开始清理临时目录: " << tmpDir;
 
   int deletedCount = 0;
   for (const auto &entry : fs::directory_iterator(tmpDir, ec)) {

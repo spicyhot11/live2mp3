@@ -49,7 +49,7 @@
         {
             "label": "4. Setup Runtime Env",
             "type": "shell",
-            "command": "cp -f backend/config.json bin/ 2>/dev/null || true && cp -f backend/user_config.toml bin/ 2>/dev/null || true && mkdir -p bin/logs",
+            "command": "cp -n backend/config.json bin/ 2>/dev/null || true && cp -n backend/user_config.toml bin/ 2>/dev/null || true && mkdir -p bin/logs",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
