@@ -4,60 +4,146 @@
         {
             "label": "1. Conan Install (Debug)",
             "type": "shell",
-            // 使用 conan install . (不带 --output-folder)，让 conanfile.txt 中的 cmake_layout 自动管理路径
-            "command": "${workspaceFolder}/.venv/bin/conan install . --build=missing -s build_type=Debug",
+            "command": "${config:brew.bin}/conan install . --build=missing -s build_type=Debug",
             "options": {
                 "cwd": "${workspaceFolder}/backend"
             },
-            "group": "build"
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
         },
         {
-            "label": "2. CMake Configure",
+            "label": "2. CMake Configure (Debug)",
             "type": "shell",
-            // 使用 Conan 生成的 preset，自动处理 toolchain 路径和构建类型
-            "command": "cmake --preset conan-debug",
+            "command": "${config:brew.bin}/cmake --preset conan-debug",
             "options": {
                 "cwd": "${workspaceFolder}/backend"
             },
             "dependsOn": [
                 "1. Conan Install (Debug)"
             ],
-            "group": "build"
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
         },
         {
             "label": "3. Build Backend (Debug)",
             "type": "shell",
-            // 构建 debug 版本，路径由 cmake_layout 决定，通常是 build/Debug
-            "command": "cmake --build build/Debug",
+            "command": "${config:brew.bin}/cmake --build build/Debug --config Debug --parallel 4",
             "options": {
                 "cwd": "${workspaceFolder}/backend"
             },
             "dependsOn": [
-                "2. CMake Configure"
+                "2. CMake Configure (Debug)"
             ],
-            "group": "build"
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
         },
         {
             "label": "4. Setup Runtime Env",
             "type": "shell",
-            // 将配置文件复制到 bin 目录，并创建 logs
-            "command": "cp backend/config.json bin/ && mkdir -p bin/logs",
+            "command": "cp -f backend/config.json bin/ 2>/dev/null || true && cp -f backend/user_config.toml bin/ 2>/dev/null || true && mkdir -p bin/logs",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
             "dependsOn": [
                 "3. Build Backend (Debug)"
             ],
-            "group": "build"
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
         },
         {
-            "label": "Build & Setup",
+            "label": "Build & Setup (Debug)",
             "dependsOn": [
                 "4. Setup Runtime Env"
             ],
             "group": {
                 "kind": "build",
                 "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "1. Conan Install (Release)",
+            "type": "shell",
+            "command": "conan install . --build=missing -s build_type=Release",
+            "options": {
+                "cwd": "${workspaceFolder}/backend"
+            },
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "2. CMake Configure (Release)",
+            "type": "shell",
+            "command": "${config:brew.bin}/cmake --preset conan-release",
+            "options": {
+                "cwd": "${workspaceFolder}/backend"
+            },
+            "dependsOn": [
+                "1. Conan Install (Release)"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "3. Build Backend (Release)",
+            "type": "shell",
+            "command": "${config:brew.bin}/cmake --build build/Release --config Release --parallel 4",
+            "options": {
+                "cwd": "${workspaceFolder}/backend"
+            },
+            "dependsOn": [
+                "2. CMake Configure (Release)"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "Build & Setup (Release)",
+            "dependsOn": [
+                "3. Build Backend (Release)",
+                "4. Setup Runtime Env"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "Clean Build",
+            "type": "shell",
+            "command": "rm -rf build build_debug bin/live2mp3",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
             }
         }
     ]
