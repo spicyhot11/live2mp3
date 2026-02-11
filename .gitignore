@@ -26,6 +26,7 @@ lib/
 *.so
 *.dylib
 *.dll
+.cache
 
 # Conan
 backend/.conan/

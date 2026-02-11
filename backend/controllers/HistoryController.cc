@@ -33,7 +33,8 @@ void HistoryController::getAll(
                                : r.filepath.substr(lastSlash + 1);
     item["filename"] = filename;
     item["fingerprint"] = r.fingerprint;
-    item["processed_at"] = r.updated_at;
+    item["start_time"] = r.start_time;
+    item["end_time"] = r.end_time;
     arr.append(item);
   }
 

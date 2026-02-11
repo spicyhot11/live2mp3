@@ -16,8 +16,8 @@ struct PendingFile {
   std::string status;
   std::string temp_mp4_path;
   std::string temp_mp3_path;
-  std::string created_at;
-  std::string updated_at;
+  std::string start_time;
+  std::string end_time;
 };
 
 void to_json(nlohmann::json &j, const PendingFile &p);

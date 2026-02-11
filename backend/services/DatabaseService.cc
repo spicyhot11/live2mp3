@@ -51,11 +51,20 @@ void DatabaseService::initSchema() {
       "status TEXT DEFAULT 'pending',"
       "temp_mp4_path TEXT,"
       "temp_mp3_path TEXT,"
-      "created_at DATETIME DEFAULT (datetime('now', 'localtime')),"
-      "updated_at DATETIME DEFAULT (datetime('now', 'localtime'))"
+      "updated_at DATETIME DEFAULT (datetime('now', 'localtime')),"
+      "start_time TEXT,"
+      "end_time TEXT"
       ");";
   if (!executeQuery(pendingSql)) {
     LOG_FATAL << "Failed to initialize pending_files schema";
+  }
+
+  // Migration: add start_time/end_time columns for existing databases
+  if (!executeQuery("ALTER TABLE pending_files ADD COLUMN start_time TEXT")) {
+    LOG_DEBUG << "Column start_time may already exist, skipping migration";
+  }
+  if (!executeQuery("ALTER TABLE pending_files ADD COLUMN end_time TEXT")) {
+    LOG_DEBUG << "Column end_time may already exist, skipping migration";
   }
 }
 

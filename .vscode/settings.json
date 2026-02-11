@@ -33,5 +33,10 @@
     },
 
     "// ============ conan ============": {},
-    "brew.bin": "/opt/homebrew/bin"
+    "brew.bin": "/opt/homebrew/bin",
+    "claudeCode.disableLoginPrompt": true,
+    "claudeCode.environmentVariables": [
+        
+        
+    ]
 }
