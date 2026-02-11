@@ -53,6 +53,12 @@ void SchedulerService::initAndStart(const Json::Value &config) {
     return;
   }
 
+  batchTaskServicePtr_ = drogon::app().getSharedPlugin<BatchTaskService>();
+  if (!batchTaskServicePtr_) {
+    LOG_FATAL << "Failed to get BatchTaskService plugin";
+    return;
+  }
+
   start();
   LOG_INFO << "Scheduler init and start";
 }
@@ -65,6 +71,7 @@ void SchedulerService::shutdown() {
   pendingFileServicePtr_.reset();
   ffmpegTaskServicePtr_.reset();
   commonThreadServicePtr_.reset();
+  batchTaskServicePtr_.reset();
 }
 
 std::string SchedulerService::getCurrentFile() {
@@ -98,7 +105,6 @@ void SchedulerService::start() {
     if (interval <= 0)
       interval = 60;
 
-    // 使用协程定时任务
     drogon::app().getLoop()->runEvery(interval * 1.0, [this]() {
       drogon::async_run(
           [this]() -> drogon::Task<> { co_await this->runTaskAsync(false); });
@@ -109,7 +115,6 @@ void SchedulerService::start() {
 }
 
 void SchedulerService::triggerNow() {
-  // 使用协程立即触发任务
   drogon::async_run(
       [this]() -> drogon::Task<> { co_await this->runTaskAsync(true); });
 }
@@ -118,8 +123,7 @@ drogon::Task<void> SchedulerService::runTaskAsync(bool immediate) {
   LOG_INFO << "Starting scheduled task..."
            << (immediate ? " (immediate mode)" : "");
 
-  // 阶段 1: 扫描阶段使用独立的并发控制
-  // 防止扫描阶段重复执行（MD5 计算是 CPU 密集型操作）
+  // 阶段 1: 扫描
   bool scanSkipped = scanRunning_.exchange(true);
   if (!scanSkipped) {
     setPhase("stability_scan");
@@ -127,7 +131,7 @@ drogon::Task<void> SchedulerService::runTaskAsync(bool immediate) {
         [this]() { runStabilityScan(); }));
     scanRunning_ = false;
 
-    // 扫描完成后，输出当前正在执行的任务（DEBUG 级别）
+    // DEBUG: 打印正在执行的任务
     auto runningTasks = ffmpegTaskServicePtr_->getRunningTasks();
     if (!runningTasks.empty()) {
       LOG_DEBUG << "当前正在执行的任务数: " << runningTasks.size();
@@ -153,7 +157,6 @@ drogon::Task<void> SchedulerService::runTaskAsync(bool immediate) {
             filesStr += ", ";
           filesStr += fs::path(f).filename().string();
         }
-        // 格式化已处理时长 (mm:ss)
         int progressSec = task.progressTime / 1000;
         int progressMin = progressSec / 60;
         progressSec = progressSec % 60;
@@ -161,7 +164,6 @@ drogon::Task<void> SchedulerService::runTaskAsync(bool immediate) {
         snprintf(progressTimeStr, sizeof(progressTimeStr), "%02d:%02d",
                  progressMin, progressSec);
 
-        // 格式化总时长 (mm:ss)
         int totalSec = task.totalDuration / 1000;
         int totalMin = totalSec / 60;
         totalSec = totalSec % 60;
@@ -169,7 +171,6 @@ drogon::Task<void> SchedulerService::runTaskAsync(bool immediate) {
         snprintf(totalTimeStr, sizeof(totalTimeStr), "%02d:%02d", totalMin,
                  totalSec);
 
-        // 格式化进度百分比
         char progressPercentStr[16];
         if (task.progress >= 0) {
           snprintf(progressPercentStr, sizeof(progressPercentStr), "%.1f%%",
@@ -178,7 +179,6 @@ drogon::Task<void> SchedulerService::runTaskAsync(bool immediate) {
           snprintf(progressPercentStr, sizeof(progressPercentStr), "N/A");
         }
 
-        // 格式化速度倍率
         char speedStr[16];
         snprintf(speedStr, sizeof(speedStr), "%.2fx", task.speed);
 
@@ -192,11 +192,13 @@ drogon::Task<void> SchedulerService::runTaskAsync(bool immediate) {
     LOG_DEBUG << "Scan already running, skipping scan phase";
   }
 
-  // 阶段 2: 处理阶段
-  // 多个批次可以并发提交到 FfmpegTaskService
-  // 由 FfmpegTaskService 的信号量（SimpleCoroSemaphore）控制实际并发执行
+  // 阶段 2: 分批处理（非阻塞）
   setPhase("merge_encode_output");
-  co_await runMergeEncodeOutputAsync(immediate);
+  runMergeEncodeOutput(immediate);
+
+  // 阶段 3: 检查是否有编码完成的批次可以开始合并
+  setPhase("check_encoded_batches");
+  checkEncodedBatches();
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -204,7 +206,7 @@ drogon::Task<void> SchedulerService::runTaskAsync(bool immediate) {
     currentPhase_ = "";
   }
 
-  LOG_INFO << "Task finished.";
+  LOG_INFO << "Task scheduling finished (processing continues in background).";
 }
 
 void SchedulerService::runStabilityScan() {
@@ -222,20 +224,17 @@ void SchedulerService::runStabilityScan() {
       currentFile_ = file;
     }
 
-    // 计算文件指纹
     std::string fingerprint = live2mp3::utils::calculateFileFingerprint(file);
     if (fingerprint.empty()) {
       LOG_WARN << "无法计算文件指纹: " << file;
       continue;
     }
 
-    // 更新或添加到待处理文件列表
     int stableCount =
         pendingFileServicePtr_->addOrUpdateFile(file, fingerprint);
 
     if (stableCount >= requiredStableCount) {
       LOG_INFO << "File is stable (count=" << stableCount << "): " << file;
-      // 标记文件为稳定状态，准备转换
       pendingFileServicePtr_->markAsStable(file);
     } else {
       LOG_DEBUG << "File stability count: " << stableCount << " for: " << file;
@@ -243,7 +242,7 @@ void SchedulerService::runStabilityScan() {
   }
 }
 
-drogon::Task<void> SchedulerService::runMergeEncodeOutputAsync(bool immediate) {
+void SchedulerService::runMergeEncodeOutput(bool immediate) {
   LOG_INFO << "Phase 2: Processing stable files for merge + encode..."
            << (immediate ? " (immediate mode)" : "");
 
@@ -252,25 +251,25 @@ drogon::Task<void> SchedulerService::runMergeEncodeOutputAsync(bool immediate) {
   int stopWaitingSeconds = config.scheduler.stop_waiting_seconds;
 
   // 1. 原子性地获取并标记所有稳定的原始文件为 processing
-  // 这样可以防止并发任务获取相同的文件
   auto stableFiles = pendingFileServicePtr_->getAndClaimStableFiles();
   if (stableFiles.empty()) {
     LOG_DEBUG << "No stable files to process";
-    co_return;
+    return;
   }
   LOG_INFO << "Claimed " << stableFiles.size()
            << " stable files for processing";
 
-  // 2. 按主播名分组（从文件名解析）
+  // 2. 按主播名分组
   std::map<std::string, std::vector<StableFile>> groupedByStreamer;
   for (const auto &pf : stableFiles) {
-    if (!fs::exists(pf.filepath)) {
-      LOG_WARN << "Source file no longer exists: " << pf.filepath;
-      pendingFileServicePtr_->removeFile(pf.filepath);
+    std::string filepath = pf.getFilepath();
+    if (!fs::exists(filepath)) {
+      LOG_WARN << "Source file no longer exists: " << filepath;
+      pendingFileServicePtr_->removeFile(filepath);
       continue;
     }
 
-    fs::path filePath(pf.filepath);
+    fs::path filePath(filepath);
     std::string filename = filePath.filename().string();
     std::string streamer = MergerService::parseTitle(filename);
     auto time = MergerService::parseTime(filename);
@@ -285,26 +284,24 @@ drogon::Task<void> SchedulerService::runMergeEncodeOutputAsync(bool immediate) {
 
   // 3. 处理每个主播分组
   for (auto &[streamer, files] : groupedByStreamer) {
-    // 按时间降序排列（最新的在前）
+    // 按时间降序排列
     std::sort(files.begin(), files.end(),
               [](const StableFile &a, const StableFile &b) {
                 return a.time > b.time;
               });
 
     // 分配批次
-    std::set<size_t> assigned; // 已分配的文件索引
+    std::set<size_t> assigned;
     std::vector<std::vector<StableFile>> batches;
 
     for (size_t i = 0; i < files.size(); ++i) {
       if (assigned.count(i))
-        continue; // 已分配则跳过
+        continue;
 
-      // 创建新批次
       std::vector<StableFile> batch;
       batch.push_back(files[i]);
       assigned.insert(i);
 
-      // 向前查找连续的录播片段
       for (size_t j = i + 1; j < files.size(); ++j) {
         if (assigned.count(j))
           continue;
@@ -315,7 +312,7 @@ drogon::Task<void> SchedulerService::runMergeEncodeOutputAsync(bool immediate) {
           batch.push_back(files[j]);
           assigned.insert(j);
         } else {
-          break; // 间隔过大，结束本批次
+          break;
         }
       }
 
@@ -325,336 +322,276 @@ drogon::Task<void> SchedulerService::runMergeEncodeOutputAsync(bool immediate) {
     // 4. 判断并处理每个批次
     auto now = std::chrono::system_clock::now();
     for (auto &batch : batches) {
-      // 使用批次中最新文件的最后修改时间判断
-      std::error_code ec;
-      auto lastModTime = fs::last_write_time(batch[0].pf.filepath, ec);
-      if (ec) {
-        LOG_WARN << "Could not get last write time for: "
-                 << batch[0].pf.filepath;
-        continue;
-      }
-      auto lastModTimePoint = std::chrono::file_clock::to_sys(lastModTime);
-      auto age = std::chrono::duration_cast<std::chrono::seconds>(
-                     now - lastModTimePoint)
-                     .count();
+      // 使用批次中最新录播的结束时间判断
+      auto age =
+          std::chrono::duration_cast<std::chrono::seconds>(now - batch[0].time)
+              .count();
 
       if (!immediate && age <= stopWaitingSeconds) {
         LOG_DEBUG << "Batch for streamer '" << streamer
                   << "' not ready yet (age=" << age
                   << "s, threshold=" << stopWaitingSeconds << "s)";
-        continue; // 未超过等待时间，跳过
+        continue;
       }
 
       // 按时间升序排列（合并时需要按时间顺序）
       std::reverse(batch.begin(), batch.end());
 
-      // 处理这批文件
-      co_await processBatchAsync(batch, config);
+      // 非阻塞处理批次
+      processBatch(batch, config);
     }
   }
 }
 
-drogon::Task<void>
-SchedulerService::processBatchAsync(const std::vector<StableFile> &batch,
+void SchedulerService::processBatch(const std::vector<StableFile> &batch,
                                     const AppConfig &config) {
   if (batch.empty())
-    co_return;
+    return;
 
   LOG_INFO << "Processing batch of " << batch.size() << " files";
 
-  // 准备原始 FLV 文件路径列表
-  std::vector<std::string> flvPaths;
-  for (const auto &f : batch) {
-    flvPaths.push_back(f.pf.filepath);
-  }
-
-  // 注意：文件已在 getAndClaimStableFiles 中被原子性标记为 processing
-  // 无需在此再次调用 markAsProcessingBatch
-
-  // 使用批次中最新的文件名作为输出文件名基础（batch
-  // 已按时间升序排列，最后一个是最新的）
-  fs::path latestFilePath(batch.back().pf.filepath);
-  std::string baseOutputName = latestFilePath.stem().string();
-
-  // 根据主播名确定输出目录
+  // 使用批次中最新的文件名作为输出文件名基础
+  std::string latestFilepath = batch.back().pf.getFilepath();
+  fs::path latestFilePath(latestFilepath);
   std::string streamer =
       MergerService::parseTitle(latestFilePath.filename().string());
   fs::path outputDir = fs::path(config.output.output_root) / streamer;
   fs::path tmpDir = fs::path(config.output.output_root) / "tmp";
 
-  // 确保输出目录和临时目录存在
   try {
     fs::create_directories(outputDir);
     fs::create_directories(tmpDir);
   } catch (...) {
   }
 
-  // ============================================================
-  // 阶段 1: 统一编码到 tmp 目录
-  // ============================================================
-  LOG_INFO << "阶段 1: 统一编码 " << flvPaths.size() << " 个文件到 tmp 目录...";
-
-  auto encodeResult = co_await encodeFilesToTmpAsync(
-      flvPaths, tmpDir.string(), config.scheduler.convert_retry_count);
-
-  if (encodeResult.successCount == 0) {
-    LOG_ERROR << "所有文件编码失败，批次处理终止";
-    // 处理失败，回滚状态到 stable
-    pendingFileServicePtr_->rollbackToStable(flvPaths);
-    co_return;
+  // 构建 BatchInputFile 列表
+  std::vector<BatchInputFile> batchInputFiles;
+  for (const auto &f : batch) {
+    BatchInputFile bif;
+    bif.filepath = f.pf.getFilepath();
+    bif.fingerprint = f.pf.fingerprint;
+    bif.pending_file_id = f.pf.id;
+    batchInputFiles.push_back(bif);
   }
 
-  LOG_INFO << "编码完成: 成功 " << encodeResult.successCount << " 个, 失败 "
-           << encodeResult.failCount << " 个";
+  // 创建数据库批次记录
+  int batchId = batchTaskServicePtr_->createBatch(
+      streamer, outputDir.string(), tmpDir.string(), batchInputFiles);
 
-  // ============================================================
-  // 阶段 2: 合并处理
-  // ============================================================
-  std::string finalMp4Path;
-  bool mergeSuccess = false;
+  if (batchId < 0) {
+    LOG_ERROR << "创建批次记录失败，回滚文件状态";
+    std::vector<std::string> flvPaths;
+    for (const auto &f : batch) {
+      flvPaths.push_back(f.pf.getFilepath());
+    }
+    pendingFileServicePtr_->rollbackToStable(flvPaths);
+    return;
+  }
 
-  if (encodeResult.successPaths.size() == 1) {
+  LOG_INFO << "Created batch id=" << batchId << " streamer=" << streamer
+           << " files=" << batch.size();
+
+  // 为每个文件提交转码任务（非阻塞）
+  for (const auto &f : batch) {
+    std::string filepath = f.pf.getFilepath();
+
+    batchTaskServicePtr_->markFileEncoding(batchId, filepath);
+
+    // 使用 onComplete 回调 - 转码完成时自动触发下一阶段
+    ffmpegTaskServicePtr_->submitTask(
+        FfmpegTaskType::CONVERT_MP4, {filepath}, {tmpDir.string()},
+        [this, batchId, filepath](FfmpegTaskResult result) {
+          onFileEncoded(batchId, filepath, result);
+        });
+  }
+}
+
+void SchedulerService::onFileEncoded(int batchId, const std::string &filepath,
+                                     const FfmpegTaskResult &result) {
+  if (result.status == FfmpegTaskStatus::COMPLETED &&
+      !result.outputFiles.empty()) {
+    std::string encodedPath = result.outputFiles[0];
+    std::string fingerprint =
+        live2mp3::utils::calculateFileFingerprint(encodedPath);
+    batchTaskServicePtr_->markFileEncoded(batchId, filepath, encodedPath,
+                                          fingerprint);
+    LOG_INFO << "Batch " << batchId << ": file encoded " << filepath << " -> "
+             << encodedPath;
+  } else {
+    batchTaskServicePtr_->markFileFailed(batchId, filepath);
+    LOG_ERROR << "Batch " << batchId << ": file encoding failed " << filepath;
+  }
+}
+
+void SchedulerService::checkEncodedBatches() {
+  auto config = configServicePtr_->getConfig();
+  int stopWaitingSeconds = config.scheduler.stop_waiting_seconds;
+
+  auto batchIds =
+      batchTaskServicePtr_->getEncodingCompleteBatchIds(stopWaitingSeconds);
+  if (batchIds.empty()) {
+    LOG_DEBUG << "No encoding-complete batches ready to merge";
+    return;
+  }
+
+  LOG_INFO << "Found " << batchIds.size()
+           << " encoding-complete batches, starting merge phase";
+  for (int batchId : batchIds) {
+    onBatchEncodingComplete(batchId);
+  }
+}
+
+void SchedulerService::onBatchEncodingComplete(int batchId) {
+  LOG_INFO << "Batch " << batchId << ": all files encoded, starting merge...";
+
+  auto batchOpt = batchTaskServicePtr_->getBatch(batchId);
+  if (!batchOpt) {
+    LOG_ERROR << "Batch " << batchId << ": batch not found";
+    return;
+  }
+  auto &batch = *batchOpt;
+
+  auto encodedPaths = batchTaskServicePtr_->getEncodedPaths(batchId);
+  if (encodedPaths.empty()) {
+    LOG_ERROR << "Batch " << batchId
+              << ": no successfully encoded files, marking failed";
+    batchTaskServicePtr_->updateBatchStatus(batchId, "failed");
+    rollbackBatchFiles(batchId);
+    return;
+  }
+
+  LOG_INFO << "Batch " << batchId << ": " << encodedPaths.size()
+           << " encoded files, " << batch.failed_count << " failed";
+
+  batchTaskServicePtr_->updateBatchStatus(batchId, "merging");
+
+  if (encodedPaths.size() == 1) {
     // 单文件：直接移动到输出目录
-    LOG_INFO << "只有单个成功编码的文件，直接移动到输出目录";
-    auto movedFiles =
-        moveFilesToOutputDir(encodeResult.successPaths, outputDir.string());
+    LOG_INFO << "Batch " << batchId
+             << ": single file, moving to output directory";
+    auto movedFiles = moveFilesToOutputDir(encodedPaths, batch.output_dir);
     if (!movedFiles.empty()) {
-      finalMp4Path = movedFiles[0];
-      mergeSuccess = true;
+      std::string finalMp4 = movedFiles[0];
+      batchTaskServicePtr_->setBatchFinalPaths(batchId, finalMp4, "");
+
+      // 继续提取 MP3
+      batchTaskServicePtr_->updateBatchStatus(batchId, "extracting_mp3");
+      ffmpegTaskServicePtr_->submitTask(
+          FfmpegTaskType::CONVERT_MP3, {finalMp4}, {batch.output_dir},
+          [this, batchId](FfmpegTaskResult result) {
+            onMp3Complete(batchId, result);
+          });
+    } else {
+      LOG_ERROR << "Batch " << batchId << ": failed to move file";
+      batchTaskServicePtr_->updateBatchStatus(batchId, "failed");
+      rollbackBatchFiles(batchId);
     }
   } else {
     // 多文件：合并
-    LOG_INFO << "阶段 2: 合并 " << encodeResult.successPaths.size()
-             << " 个编码文件...";
+    LOG_INFO << "Batch " << batchId << ": merging " << encodedPaths.size()
+             << " files...";
+    ffmpegTaskServicePtr_->submitTask(
+        FfmpegTaskType::MERGE, encodedPaths, {batch.output_dir},
+        [this, batchId, encodedPaths](FfmpegTaskResult result) {
+          onMergeComplete(batchId, result);
+        });
+  }
+}
 
-    auto mergeResult = co_await mergeWithRetryAsync(
-        encodeResult.successPaths, outputDir.string(),
-        config.scheduler.merge_retry_count);
+void SchedulerService::onMergeComplete(int batchId,
+                                       const FfmpegTaskResult &result) {
+  auto batchOpt = batchTaskServicePtr_->getBatch(batchId);
+  if (!batchOpt) {
+    LOG_ERROR << "Batch " << batchId << ": batch not found in onMergeComplete";
+    return;
+  }
+  auto &batch = *batchOpt;
 
-    if (mergeResult.has_value()) {
-      finalMp4Path = *mergeResult;
-      mergeSuccess = true;
+  if (result.status == FfmpegTaskStatus::COMPLETED &&
+      !result.outputFiles.empty()) {
+    std::string finalMp4 = result.outputFiles[0];
+    LOG_INFO << "Batch " << batchId << ": merge successful -> " << finalMp4;
 
-      // 合并成功，清理 tmp 中的源文件
-      for (const auto &path : encodeResult.successPaths) {
-        try {
-          if (fs::exists(path)) {
-            fs::remove(path);
-            LOG_DEBUG << "清理 tmp 文件: " << path;
-          }
-        } catch (...) {
+    batchTaskServicePtr_->setBatchFinalPaths(batchId, finalMp4, "");
+
+    // 清理 tmp 中的源编码文件
+    auto encodedPaths = batchTaskServicePtr_->getEncodedPaths(batchId);
+    for (const auto &path : encodedPaths) {
+      try {
+        if (fs::exists(path)) {
+          fs::remove(path);
+          LOG_DEBUG << "清理 tmp 文件: " << path;
         }
+      } catch (...) {
       }
-    } else {
-      // ============================================================
-      // 阶段 2.5: 合并失败降级处理
-      // ============================================================
-      LOG_WARN << "合并失败，执行降级处理：将所有编码文件移动到输出目录";
-      auto movedFiles =
-          moveFilesToOutputDir(encodeResult.successPaths, outputDir.string());
-
-      // 为每个移动的文件提取 MP3
-      for (const auto &mp4Path : movedFiles) {
-        LOG_INFO << "为降级文件提取 MP3: " << mp4Path;
-        auto mp3Result = co_await ffmpegTaskServicePtr_->submitTask(
-            FfmpegTaskType::CONVERT_MP3, {mp4Path}, {outputDir.string()});
-
-        if (mp3Result.has_value() && !mp3Result->outputFiles.empty()) {
-          LOG_INFO << "MP3 提取成功: " << mp3Result->outputFiles[0];
-        } else {
-          LOG_WARN << "MP3 提取失败: " << mp4Path;
-        }
-      }
-
-      // 标记所有原始 FLV 为已完成（即使降级处理）
-      for (const auto &f : batch) {
-        pendingFileServicePtr_->markAsCompleted(f.pf.filepath);
-      }
-
-      LOG_INFO << "降级处理完成，批次结束";
-      co_return;
     }
-  }
 
-  if (!mergeSuccess || finalMp4Path.empty()) {
-    LOG_ERROR << "合并/移动失败";
-    pendingFileServicePtr_->rollbackToStable(flvPaths);
-    co_return;
-  }
-
-  LOG_INFO << "AV1 MP4 created: " << finalMp4Path;
-
-  // ============================================================
-  // 阶段 3: 提取 MP3
-  // ============================================================
-  LOG_INFO << "阶段 3: 提取 MP3...";
-  auto mp3Result = co_await ffmpegTaskServicePtr_->submitTask(
-      FfmpegTaskType::CONVERT_MP3, {finalMp4Path}, {outputDir.string()});
-
-  if (mp3Result.has_value() && !mp3Result->outputFiles.empty()) {
-    LOG_INFO << "MP3 created: " << mp3Result->outputFiles[0];
+    // 继续提取 MP3
+    batchTaskServicePtr_->updateBatchStatus(batchId, "extracting_mp3");
+    ffmpegTaskServicePtr_->submitTask(FfmpegTaskType::CONVERT_MP3, {finalMp4},
+                                      {batch.output_dir},
+                                      [this, batchId](FfmpegTaskResult result) {
+                                        onMp3Complete(batchId, result);
+                                      });
   } else {
-    LOG_WARN << "MP3 extraction failed";
-  }
+    // 合并失败：降级处理，移动所有编码文件到输出目录
+    LOG_WARN << "Batch " << batchId
+             << ": merge failed, fallback to individual files";
 
-  // 标记所有原始 FLV 为已完成
-  for (const auto &f : batch) {
-    pendingFileServicePtr_->markAsCompleted(f.pf.filepath);
-  }
+    auto encodedPaths = batchTaskServicePtr_->getEncodedPaths(batchId);
+    auto movedFiles = moveFilesToOutputDir(encodedPaths, batch.output_dir);
 
-  LOG_INFO << "Batch processing completed";
+    // 为每个移动的文件提取 MP3
+    for (const auto &mp4Path : movedFiles) {
+      ffmpegTaskServicePtr_->submitTask(FfmpegTaskType::CONVERT_MP3, {mp4Path},
+                                        {batch.output_dir});
+    }
+
+    // 标记为完成（降级处理也视为完成）
+    markBatchFilesCompleted(batchId);
+    batchTaskServicePtr_->updateBatchStatus(batchId, "completed");
+    LOG_INFO << "Batch " << batchId << ": fallback processing completed";
+  }
 }
 
-// ============================================================
-// 辅助方法：统一编码到 tmp 目录
-// ============================================================
-drogon::Task<SchedulerService::BatchEncodeResult>
-SchedulerService::encodeFilesToTmpAsync(const std::vector<std::string> &files,
-                                        const std::string &tmpDir,
-                                        int maxRetries) {
-
-  BatchEncodeResult result;
-  result.successCount = 0;
-  result.failCount = 0;
-
-  if (files.empty()) {
-    co_return result;
+void SchedulerService::onMp3Complete(int batchId,
+                                     const FfmpegTaskResult &result) {
+  auto batchOpt = batchTaskServicePtr_->getBatch(batchId);
+  if (!batchOpt) {
+    LOG_ERROR << "Batch " << batchId << ": batch not found in onMp3Complete";
+    return;
   }
 
-  // 使用共享结果收集器，按完成顺序收集结果
-  struct ResultCollector {
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::queue<ConvertResult> results;
-    size_t completedCount = 0;
-    size_t totalCount = 0;
-  };
-
-  auto collector = std::make_shared<ResultCollector>();
-  collector->totalCount = files.size();
-
-  // 并发启动所有编码任务
-  for (const auto &inputPath : files) {
-    // 使用 async_run 并发启动每个编码任务
-    drogon::async_run([this, inputPath, tmpDir, maxRetries,
-                       collector]() -> drogon::Task<void> {
-      ConvertResult convertResult;
-      convertResult.originalPath = inputPath;
-      convertResult.success = false;
-      convertResult.retryCount = 0;
-
-      for (int attempt = 1; attempt <= maxRetries; ++attempt) {
-        convertResult.retryCount = attempt;
-        LOG_INFO << "编码文件 (尝试 " << attempt << "/" << maxRetries
-                 << "): " << inputPath;
-
-        auto encodeTaskResult = co_await ffmpegTaskServicePtr_->submitTask(
-            FfmpegTaskType::CONVERT_MP4, {inputPath}, {tmpDir});
-
-        if (encodeTaskResult.has_value() &&
-            !encodeTaskResult->outputFiles.empty()) {
-          convertResult.success = true;
-          convertResult.convertedPath = encodeTaskResult->outputFiles[0];
-          LOG_INFO << "编码成功: " << inputPath << " -> "
-                   << convertResult.convertedPath;
-          break;
-        } else {
-          LOG_WARN << "编码失败 (尝试 " << attempt << "/" << maxRetries
-                   << "): " << inputPath;
-        }
-      }
-
-      // 任务完成，推送结果到队列
-      {
-        std::lock_guard<std::mutex> lock(collector->mutex);
-        collector->results.push(std::move(convertResult));
-        collector->completedCount++;
-      }
-      collector->cv.notify_one();
-    });
+  if (result.status == FfmpegTaskStatus::COMPLETED &&
+      !result.outputFiles.empty()) {
+    std::string mp3Path = result.outputFiles[0];
+    LOG_INFO << "Batch " << batchId << ": MP3 created -> " << mp3Path;
+    batchTaskServicePtr_->setBatchFinalPaths(batchId, batchOpt->final_mp4_path,
+                                             mp3Path);
+  } else {
+    LOG_WARN << "Batch " << batchId << ": MP3 extraction failed";
   }
 
-  // 按完成顺序收集结果（使用 awaitCallback 等待 cv 通知）
-  size_t collected = 0;
-  const size_t totalFiles = files.size();
-
-  while (collected < totalFiles) {
-    // 使用 awaitCallback 非阻塞等待条件变量通知
-    ConvertResult convertResult =
-        co_await live2mp3::utils::awaitCallback<ConvertResult>(
-            [collector](std::function<void(ConvertResult)> callback) {
-              auto *loop = trantor::EventLoop::getEventLoopOfCurrentThread();
-              if (!loop)
-                loop = drogon::app().getLoop(); // 保底
-
-              // 2. 定义一个递归检查函数
-              // 使用 shared_ptr 是为了让 lambda
-              // 能捕获它自己（解决递归生命周期问题）
-              auto checker = std::make_shared<std::function<void()>>();
-
-              *checker = [collector, callback, loop, checker]() mutable {
-                std::unique_lock<std::mutex> lock(collector->mutex);
-
-                // A. 查到了：取出数据，触发回调，结束递归
-                if (!collector->results.empty()) {
-                  auto res = std::move(collector->results.front());
-                  collector->results.pop();
-                  lock.unlock();
-                  callback(std::move(res)); // 唤醒协程
-                  return;
-                }
-
-                // B. 没查到：解锁，并在 10ms 后让 Loop 再次调用我
-                lock.unlock();
-
-                // 注意：这里把 checker 再次传给 lambda，延长生命周期
-                loop->runAfter(0.01, [checker]() { (*checker)(); });
-              };
-
-              // 3. 立即启动第一次检查
-              (*checker)();
-            });
-
-    collected++;
-    result.results.push_back(convertResult);
-    if (convertResult.success) {
-      result.successCount++;
-      result.successPaths.push_back(convertResult.convertedPath);
-    } else {
-      result.failCount++;
-      LOG_ERROR << "文件编码失败（已达最大重试次数）: "
-                << convertResult.originalPath;
-    }
-  }
-
-  co_return result;
+  // 标记所有原始文件为 completed
+  markBatchFilesCompleted(batchId);
+  batchTaskServicePtr_->updateBatchStatus(batchId, "completed");
+  LOG_INFO << "Batch " << batchId << ": processing completed";
 }
 
-// ============================================================
-// 辅助方法：带重试的合并操作
-// ============================================================
-drogon::Task<std::optional<std::string>>
-SchedulerService::mergeWithRetryAsync(const std::vector<std::string> &files,
-                                      const std::string &outputDir,
-                                      int maxRetries) {
-
-  for (int attempt = 1; attempt <= maxRetries; ++attempt) {
-    LOG_INFO << "合并文件 (尝试 " << attempt << "/" << maxRetries
-             << "): " << files.size() << " 个文件";
-
-    auto mergeResult = co_await ffmpegTaskServicePtr_->submitTask(
-        FfmpegTaskType::MERGE, files, {outputDir});
-
-    if (mergeResult.has_value() && !mergeResult->outputFiles.empty()) {
-      LOG_INFO << "合并成功: " << mergeResult->outputFiles[0];
-      co_return mergeResult->outputFiles[0];
-    } else {
-      LOG_WARN << "合并失败 (尝试 " << attempt << "/" << maxRetries << ")";
-    }
+void SchedulerService::markBatchFilesCompleted(int batchId) {
+  auto batchFiles = batchTaskServicePtr_->getBatchFiles(batchId);
+  for (const auto &bf : batchFiles) {
+    pendingFileServicePtr_->markAsCompleted(bf.getFilepath());
   }
+}
 
-  LOG_ERROR << "合并失败（已达最大重试次数）";
-  co_return std::nullopt;
+void SchedulerService::rollbackBatchFiles(int batchId) {
+  auto batchFiles = batchTaskServicePtr_->getBatchFiles(batchId);
+  std::vector<std::string> paths;
+  for (const auto &bf : batchFiles) {
+    paths.push_back(bf.getFilepath());
+  }
+  pendingFileServicePtr_->rollbackToStable(paths);
 }
 
 // ============================================================
@@ -671,7 +608,6 @@ SchedulerService::moveFilesToOutputDir(const std::vector<std::string> &files,
       fs::path src(srcPath);
       fs::path dst = fs::path(outputDir) / src.filename();
 
-      // 如果目标已存在，添加时间戳后缀
       if (fs::exists(dst)) {
         auto now = std::chrono::system_clock::now();
         auto epoch = now.time_since_epoch();

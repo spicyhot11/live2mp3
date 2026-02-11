@@ -62,13 +62,19 @@
             ]
         },
         {
+            "name": "BatchTaskService",
+            "config": {},
+            "dependencies": []
+        },
+        {
             "name": "SchedulerService",
             "config": {},
             "dependencies": [
                 "ConfigService",
                 "MergerService",
                 "ScannerService",
-                "ConverterService"
+                "ConverterService",
+                "BatchTaskService"
             ]
         },
         {

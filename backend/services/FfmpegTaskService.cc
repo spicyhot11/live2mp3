@@ -58,7 +58,6 @@ FfmpegTaskResult FfmpegTaskProcDetail::getProcessResult() {
     result.progressBitrate = pipe->bitrate;
     result.totalDuration = pipe->totalDuration;
     result.progress = pipe->progress;
-    // 计算速度倍率：已处理时长 / 实际耗时
     if (startTime > 0) {
       auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::system_clock::now().time_since_epoch())
@@ -98,7 +97,6 @@ int FfmpegTaskProcDetail::getTotalDuration() const {
 
 void FfmpegTaskProcDetail::cancel() {
   cancelled_ = true;
-  // 终止 FFmpeg 进程
   pid_t currentPid = pid_.load();
   if (currentPid > 0) {
     LOG_DEBUG << "取消任务，终止 FFmpeg 进程 " << currentPid;
@@ -118,7 +116,12 @@ void FfmpegTaskProcDetail::run() {
                     std::chrono::system_clock::now().time_since_epoch())
                     .count();
     }
-    promise_.set_value(getProcessResult());
+    try {
+      promise_.set_value(getProcessResult());
+    } catch (const std::future_error &e) {
+      LOG_WARN << "FfmpegTaskProcDetail: promise already set (cancelled): "
+               << e.what();
+    }
     return;
   }
 
@@ -132,12 +135,10 @@ void FfmpegTaskProcDetail::run() {
   }
 
   try {
-    // 执行任务函数
     if (executeFunc_.func && !cancelled_) {
       executeFunc_.func(weak_from_this());
     }
 
-    // 再次检查取消标志
     if (cancelled_) {
       {
         std::lock_guard<std::mutex> lock(mutexStatic_);
@@ -147,11 +148,16 @@ void FfmpegTaskProcDetail::run() {
                       std::chrono::system_clock::now().time_since_epoch())
                       .count();
       }
-      promise_.set_value(getProcessResult());
+      try {
+        promise_.set_value(getProcessResult());
+      } catch (const std::future_error &e) {
+        LOG_WARN << "FfmpegTaskProcDetail: promise already set (cancelled during "
+                    "execution): "
+                 << e.what();
+      }
       return;
     }
 
-    // 执行回调函数
     if (executeFunc_.callback && !cancelled_) {
       executeFunc_.callback(weak_from_this());
     }
@@ -172,11 +178,9 @@ void FfmpegTaskProcDetail::run() {
                   .count();
   }
 
-  // 设置 promise 值，通知等待者任务已完成
   try {
     promise_.set_value(getProcessResult());
   } catch (const std::future_error &e) {
-    // promise 可能已经被设置过，忽略
     LOG_WARN << "FfmpegTaskProcDetail: promise already set: " << e.what();
   }
 }
@@ -217,27 +221,92 @@ FfmpegTaskProcDetail::getInstance(const FfmpegTaskInput &input) {
   return instance;
 }
 
+// 重试支持方法
+
+int FfmpegTaskProcDetail::getRetryCount() const { return retryCount_.load(); }
+
+int FfmpegTaskProcDetail::incrementRetry() { return ++retryCount_; }
+
+void FfmpegTaskProcDetail::setMaxRetries(int max) { maxRetries_ = max; }
+
+int FfmpegTaskProcDetail::getMaxRetries() const { return maxRetries_.load(); }
+
+bool FfmpegTaskProcDetail::isRetryExhausted() const {
+  return retryCount_.load() >= maxRetries_.load();
+}
+
+void FfmpegTaskProcDetail::resetForRetry() {
+  std::lock_guard<std::mutex> lock(mutexStatic_);
+  status = FfmpegTaskStatus::PENDING;
+  resultMessage.clear();
+  startTime = 0;
+  endTime = 0;
+  cancelled_ = false;
+  pid_ = 0;
+
+  // 重建 promise/future 以便再次使用
+  promise_ = std::promise<FfmpegTaskResult>();
+  future_ = promise_.get_future().share();
+}
+
 // ============================================================
-// FfAsyncChannel 实现
+// FfAsyncChannel 实现 (调度线程 + 队列驱动)
 // ============================================================
 
 FfAsyncChannel::FfAsyncChannel(
-    size_t capacity, size_t maxWaiting,
+    size_t maxConcurrent, int maxRetries,
     std::shared_ptr<CommonThreadService> threadServicePtr)
-    : semaphore_(capacity, maxWaiting), threadServicePtr_(threadServicePtr) {}
+    : maxConcurrent_(maxConcurrent), maxRetries_(maxRetries),
+      threadServicePtr_(threadServicePtr) {
+  // 启动调度线程
+  schedulerThread_ = std::thread([this]() { schedulerLoop(); });
+  LOG_INFO << "FfAsyncChannel: scheduler thread started, maxConcurrent="
+           << maxConcurrent << ", maxRetries=" << maxRetries;
+}
 
 FfAsyncChannel::~FfAsyncChannel() { close(); }
 
 void FfAsyncChannel::close() {
+  bool expected = false;
+  if (!closed_.compare_exchange_strong(expected, true)) {
+    return; // 已经关闭
+  }
+
+  LOG_INFO << "FfAsyncChannel::close() - 正在关闭...";
+
+  // 唤醒调度线程
+  cv_.notify_all();
+
+  // 等待调度线程退出
+  if (schedulerThread_.joinable()) {
+    schedulerThread_.join();
+  }
+
   // 取消所有正在运行的任务
-  std::lock_guard<std::mutex> lock(mutex_);
-  LOG_INFO << "FfAsyncChannel::close() - 取消 " << taskMap_.size() << " 个任务";
-  for (auto &[id, task] : taskMap_) {
-    if (task) {
-      task->cancel();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    LOG_INFO << "FfAsyncChannel::close() - 取消 " << taskMap_.size()
+             << " 个运行中任务";
+    for (auto &[id, task] : taskMap_) {
+      if (task) {
+        task->cancel();
+      }
+    }
+    // 注意：不清理 taskMap_，让 onTaskFinished 正常递减 runningCount_
+
+    // 清空待处理队列
+    while (!pendingQueue_.empty()) {
+      pendingQueue_.pop();
     }
   }
-  taskMap_.clear();
+
+  // 等待所有运行中的任务完成（onTaskFinished 会递减 runningCount_）
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    drainCv_.wait(lock, [this]() { return runningCount_ == 0; });
+  }
+
+  LOG_INFO << "FfAsyncChannel::close() - 所有任务已结束";
 }
 
 std::vector<FfmpegTaskProcess> FfAsyncChannel::getRunningTasks() {
@@ -251,83 +320,142 @@ std::vector<FfmpegTaskProcess> FfAsyncChannel::getRunningTasks() {
   return tasks;
 }
 
-drogon::Task<std::optional<FfmpegTaskResult>>
-FfAsyncChannel::send(FfmpegTaskInput item) {
-  // 1. 获取信号量许可
-  bool acquired = co_await semaphore_.acquire();
-  if (!acquired) {
-    LOG_WARN << "FfmpegTaskService: failed to acquire semaphore, type: "
-             << static_cast<int>(item.type);
-    co_return std::nullopt; // 返回空optional表示失败
+void FfAsyncChannel::submit(FfmpegTaskInput item,
+                            std::function<void(FfmpegTaskResult)> onComplete) {
+  if (closed_) {
+    LOG_WARN << "FfAsyncChannel::submit: channel is closed";
+    return;
   }
 
-  // 2. 创建任务并获取 ID
-  std::shared_ptr<FfmpegTaskProcDetail> taskProcDetail =
-      FfmpegTaskProcDetail::getInstance(item);
+  // 创建任务实例
+  auto taskProcDetail = FfmpegTaskProcDetail::getInstance(item);
+  taskProcDetail->setMaxRetries(maxRetries_);
   std::string taskId = taskProcDetail->getId();
 
-  // 3. 注册到任务映射表，保持 shared_ptr 活跃
+  LOG_DEBUG << "FfAsyncChannel::submit: queued task id=" << taskId
+            << " type=" << static_cast<int>(item.type);
+
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    taskMap_[taskId] = taskProcDetail;
+    pendingQueue_.push(std::make_shared<QueueItem>(
+        QueueItem{taskProcDetail, std::move(onComplete)}));
   }
 
-  // 4. 提交任务到线程池并等待完成
-  try {
-    auto future = threadServicePtr_->runTaskAsync(
-        [taskProcDetail]() { taskProcDetail->run(); });
+  // 唤醒调度线程
+  cv_.notify_one();
+}
 
-    // 使用FutureAwaiter等待任务完成 - 零轮询！
-    co_await live2mp3::utils::awaitFuture(std::move(future));
-  } catch (const std::exception &e) {
-    LOG_ERROR << "FfmpegTaskService: task execution failed: " << e.what();
+void FfAsyncChannel::schedulerLoop() {
+  LOG_INFO << "FfAsyncChannel: scheduler loop started";
 
-    // 释放信号量
-    semaphore_.release();
+  while (true) {
+    std::shared_ptr<QueueItem> itemPtr;
+    bool hasItem = false;
 
-    // 从任务映射表中移除
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+
+      // 等待条件：有任务 && 有空闲槽位，或者通道关闭
+      cv_.wait(lock, [this]() {
+        return closed_ ||
+               (!pendingQueue_.empty() && runningCount_ < maxConcurrent_);
+      });
+
+      if (closed_ && pendingQueue_.empty()) {
+        break; // 通道关闭且无待处理任务
+      }
+
+      if (closed_) {
+        // 通道关闭但还有待处理任务，丢弃
+        LOG_INFO << "FfAsyncChannel: discarding " << pendingQueue_.size()
+                 << " pending tasks on close";
+        while (!pendingQueue_.empty()) {
+          pendingQueue_.pop();
+        }
+        break;
+      }
+
+      if (!pendingQueue_.empty() && runningCount_ < maxConcurrent_) {
+        itemPtr = std::move(pendingQueue_.front());
+        pendingQueue_.pop();
+        hasItem = true;
+        runningCount_++;
+
+        // 注册到任务映射表
+        std::string taskId = itemPtr->task->getId();
+        taskMap_[taskId] = itemPtr->task;
+      }
+    }
+
+    if (hasItem) {
+      std::string taskId = itemPtr->task->getId();
+
+      // 提交到线程池执行
+      threadServicePtr_->runTask([this, itemPtr, taskId]() {
+        itemPtr->task->run();
+        onTaskFinished(taskId, itemPtr);
+      });
+    }
+  }
+
+  LOG_INFO << "FfAsyncChannel: scheduler loop exited";
+}
+
+void FfAsyncChannel::onTaskFinished(const std::string &taskId,
+                                    std::shared_ptr<QueueItem> itemPtr) {
+  FfmpegTaskResult result = itemPtr->task->getProcessResult();
+
+  // 关闭中：跳过重试和回调，只做计数递减
+  if (closed_) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       taskMap_.erase(taskId);
+      runningCount_--;
     }
-
-    co_return std::nullopt; // 返回失败
+    drainCv_.notify_one();
+    return;
   }
 
-  // 5. 任务完成，释放信号量
-  semaphore_.release();
+  if (result.status == FfmpegTaskStatus::FAILED &&
+      !itemPtr->task->isCancelled() && !itemPtr->task->isRetryExhausted()) {
+    // 任务失败，尚未耗尽重试次数，重新入队
+    int retryNum = itemPtr->task->incrementRetry();
+    LOG_WARN << "FfAsyncChannel: task " << taskId << " failed, retry "
+             << retryNum << "/" << itemPtr->task->getMaxRetries();
 
-  // 获取执行结果
-  FfmpegTaskResult result = taskProcDetail->getProcessResult();
+    itemPtr->task->resetForRetry();
 
-  // 6. 从任务映射表中移除
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      taskMap_.erase(taskId);
+      runningCount_--;
+      pendingQueue_.push(std::move(itemPtr));
+    }
+    cv_.notify_one();
+    return;
+  }
+
+  // 任务最终完成（成功或重试耗尽）
   {
     std::lock_guard<std::mutex> lock(mutex_);
     taskMap_.erase(taskId);
+    runningCount_--;
   }
 
-  LOG_DEBUG << "FfmpegTaskService: task completed, id: " << taskId;
-  co_return result; // 返回成功的结果
-}
+  LOG_DEBUG << "FfAsyncChannel: task " << taskId
+            << " finished, status=" << static_cast<int>(result.status);
 
-void FfAsyncChannel::sendAsync(
-    FfmpegTaskInput item,
-    std::function<void(std::optional<std::string>)> callback) {
-  // 使用 drogon::async_run 启动协程，实现发射后不管
-  drogon::async_run(
-      [this, item = std::move(item),
-       callback = std::move(callback)]() mutable -> drogon::Task<> {
-        auto result = co_await this->send(std::move(item));
+  // 调用完成回调
+  if (itemPtr->onComplete) {
+    try {
+      itemPtr->onComplete(result);
+    } catch (const std::exception &e) {
+      LOG_ERROR << "FfAsyncChannel: onComplete callback error: " << e.what();
+    }
+  }
 
-        // 如果提供了回调函数，则调用它
-        if (callback) {
-          if (result.has_value()) {
-            callback(result->id);
-          } else {
-            callback(std::nullopt);
-          }
-        }
-      });
+  // 唤醒调度线程处理下一个任务
+  cv_.notify_one();
 }
 
 // ============================================================
@@ -335,22 +463,18 @@ void FfAsyncChannel::sendAsync(
 // ============================================================
 
 void FfmpegTaskService::initAndStart(const Json::Value &config) {
-  // 读取配置
-  size_t maxConcurrent = 2; // 默认值
-  size_t maxWaiting = 10000;
-  // TODO: taskTimeoutSeconds use?
+  size_t maxConcurrent = 2;
+  int maxRetries = 3;
 
   configService_ = drogon::app().getSharedPlugin<ConfigService>();
   if (configService_) {
     auto appConfig = configService_->getConfig();
     maxConcurrent = appConfig.ffmpeg_task.maxConcurrentTasks;
-    maxWaiting = appConfig.ffmpeg_task.maxWaitingTasks;
-    // taskTimeoutSeconds = appConfig.ffmpeg_task.taskTimeoutSeconds;
+    maxRetries = appConfig.scheduler.convert_retry_count;
   } else {
     LOG_ERROR << "FfmpegTaskService: ConfigService not found, using defaults";
   }
 
-  // 获取 CommonThreadService
   threadServicePtr_ = drogon::app().getSharedPlugin<CommonThreadService>();
   if (!threadServicePtr_) {
     LOG_FATAL << "FfmpegTaskService: CommonThreadService not found";
@@ -359,7 +483,6 @@ void FfmpegTaskService::initAndStart(const Json::Value &config) {
 
   size_t threadCount = threadServicePtr_->getThreadCount();
 
-  // 验证：容量不超过线程数
   if (maxConcurrent > threadCount) {
     LOG_WARN << "FfmpegTaskService: maxConcurrentTasks (" << maxConcurrent
              << ") exceeds thread pool size (" << threadCount
@@ -367,12 +490,11 @@ void FfmpegTaskService::initAndStart(const Json::Value &config) {
     maxConcurrent = threadCount;
   }
 
-  // 创建任务通道
-  channel_ = std::make_unique<FfAsyncChannel>(maxConcurrent, maxWaiting,
+  channel_ = std::make_unique<FfAsyncChannel>(maxConcurrent, maxRetries,
                                               threadServicePtr_);
 
   LOG_INFO << "FfmpegTaskService initialized: "
-           << "maxConcurrent=" << maxConcurrent << ", maxWaiting=" << maxWaiting
+           << "maxConcurrent=" << maxConcurrent << ", maxRetries=" << maxRetries
            << ", threadPoolSize=" << threadCount;
 }
 
@@ -393,7 +515,6 @@ void FfmpegTaskService::ConvertMp4Task(
     return;
   }
 
-  // 获取 ConverterService
   auto converterService = drogon::app().getSharedPlugin<ConverterService>();
   if (!converterService) {
     LOG_ERROR
@@ -401,7 +522,6 @@ void FfmpegTaskService::ConvertMp4Task(
     return;
   }
 
-  // 获取任务信息
   auto result = detail->getProcessResult();
   const auto &inputFiles = result.files;
   const auto &outputDirs = result.outputFiles;
@@ -421,12 +541,8 @@ void FfmpegTaskService::ConvertMp4Task(
   bool hasError = false;
   int successCount = 0;
 
-  // 创建进度回调，用于更新任务状态
   auto progressCallback = [item](const live2mp3::utils::FfmpegPipeInfo &info) {
     if (auto detail = item.lock()) {
-      // LOG_DEBUG << "FfmpegTaskService::ConvertMp4Task: 进度回调 FPS: " <<
-      // info.fps
-      //           << " BITRATE: " << info.bitrate << " TIME: " << info.time;
       detail->setPipeInfo(info);
     }
   };
@@ -438,15 +554,12 @@ void FfmpegTaskService::ConvertMp4Task(
       break;
     }
 
-    // 创建取消检查回调
     auto cancelCheck = [detail]() {
       return detail->isCancelled() || !drogon::app().isRunning();
     };
 
-    // 创建 PID 回调
     auto pidCallback = [detail](pid_t pid) { detail->setPid(pid); };
 
-    // 调用 ConverterService 进行转换
     auto outputPath = converterService->convertToAv1Mp4(
         inputPath, outputDir, progressCallback, cancelCheck, pidCallback);
     if (outputPath) {
@@ -456,7 +569,6 @@ void FfmpegTaskService::ConvertMp4Task(
                << *outputPath;
     } else {
       hasError = true;
-      // 转换失败，确保 outputFiles 为空
       detail->setOutputFiles({});
       resultMessage += "转换失败: " + inputPath + "; ";
       LOG_ERROR << "ConvertMp4Task: 转换失败 " << inputPath;
@@ -478,7 +590,6 @@ void FfmpegTaskService::ConvertMp3Task(
     return;
   }
 
-  // 获取 ConverterService
   auto converterService = drogon::app().getSharedPlugin<ConverterService>();
   if (!converterService) {
     LOG_ERROR
@@ -486,7 +597,6 @@ void FfmpegTaskService::ConvertMp3Task(
     return;
   }
 
-  // 获取任务信息
   auto result = detail->getProcessResult();
   const auto &inputFiles = result.files;
   const auto &outputDirs = result.outputFiles;
@@ -503,7 +613,6 @@ void FfmpegTaskService::ConvertMp3Task(
     return;
   }
 
-  // 检查输入文件是否有效（确保不抛出异常）
   for (const auto &file : inputFiles) {
     if (file.empty()) {
       LOG_ERROR << "FfmpegTaskService::ConvertMp3Task: 输入文件路径为空";
@@ -517,7 +626,6 @@ void FfmpegTaskService::ConvertMp3Task(
   bool hasError = false;
   int successCount = 0;
 
-  // 创建进度回调
   auto progressCallback = [item](const live2mp3::utils::FfmpegPipeInfo &info) {
     if (auto detail = item.lock()) {
       detail->setPipeInfo(info);
@@ -531,15 +639,12 @@ void FfmpegTaskService::ConvertMp3Task(
       break;
     }
 
-    // 创建取消检查回调
     auto cancelCheck = [detail]() {
       return detail->isCancelled() || !drogon::app().isRunning();
     };
 
-    // 创建 PID 回调
     auto pidCallback = [detail](pid_t pid) { detail->setPid(pid); };
 
-    // 调用 ConverterService 提取 MP3
     auto outputPath = converterService->extractMp3FromVideo(
         inputPath, outputDir, progressCallback, cancelCheck, pidCallback);
     if (outputPath) {
@@ -549,7 +654,6 @@ void FfmpegTaskService::ConvertMp3Task(
                << *outputPath;
     } else {
       hasError = true;
-      // 提取失败，确保 outputFiles 为空
       detail->setOutputFiles({});
       resultMessage += "提取失败: " + inputPath + "; ";
       LOG_ERROR << "ConvertMp3Task: 提取失败 " << inputPath;
@@ -570,14 +674,12 @@ void FfmpegTaskService::MergeTask(std::weak_ptr<FfmpegTaskProcDetail> item) {
     return;
   }
 
-  // 获取 MergerService
   auto mergerService = drogon::app().getSharedPlugin<MergerService>();
   if (!mergerService) {
     LOG_ERROR << "FfmpegTaskService::MergeTask: 获取 MergerService 失败";
     return;
   }
 
-  // 获取任务信息
   auto result = detail->getProcessResult();
   const auto &inputFiles = result.files;
   const auto &outputDirs = result.outputFiles;
@@ -599,22 +701,18 @@ void FfmpegTaskService::MergeTask(std::weak_ptr<FfmpegTaskProcDetail> item) {
 
   std::string outputDir = outputDirs[0];
 
-  // 创建进度回调
   auto progressCallback = [item](const live2mp3::utils::FfmpegPipeInfo &info) {
     if (auto detail = item.lock()) {
       detail->setPipeInfo(info);
     }
   };
 
-  // 创建取消检查回调
   auto cancelCheck = [detail]() {
     return detail->isCancelled() || !drogon::app().isRunning();
   };
 
-  // 创建 PID 回调
   auto pidCallback = [detail](pid_t pid) { detail->setPid(pid); };
 
-  // 调用 MergerService 进行合并
   auto outputPath = mergerService->mergeVideoFiles(
       inputFiles, outputDir, progressCallback, cancelCheck, pidCallback);
   if (outputPath) {
@@ -630,7 +728,7 @@ void FfmpegTaskService::MergeTask(std::weak_ptr<FfmpegTaskProcDetail> item) {
 }
 
 // ============================================================
-// FfmpegTaskService 新增接口实现
+// FfmpegTaskService 接口实现
 // ============================================================
 
 std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)>
@@ -648,74 +746,29 @@ FfmpegTaskService::getTaskFunc(FfmpegTaskType type) {
   }
 }
 
-drogon::Task<std::optional<FfmpegTaskResult>> FfmpegTaskService::submitTask(
+void FfmpegTaskService::submitTask(
     FfmpegTaskType type, const std::vector<std::string> &files,
     const std::vector<std::string> &outputFiles,
+    std::function<void(FfmpegTaskResult)> onComplete,
     std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> callback,
     std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> customFunc) {
 
   if (!channel_) {
     LOG_ERROR << "FfmpegTaskService::submitTask: channel_ 未初始化";
-    co_return std::nullopt;
+    return;
   }
 
-  // 根据类型获取处理函数
   auto taskFunc = getTaskFunc(type);
   if (!taskFunc) {
-    // 如果不是内置类型，使用自定义函数
     if (customFunc) {
       taskFunc = customFunc;
     } else {
       LOG_ERROR
           << "FfmpegTaskService::submitTask: 未知任务类型且未提供自定义函数";
-      co_return std::nullopt;
-    }
-  }
-
-  // 构造任务输入
-  FfmpegTaskInput input;
-  input.type = type;
-  input.files = files;
-  input.outputFiles = outputFiles;
-  input.func = taskFunc;
-  input.callback = callback;
-
-  // 通过 channel 发送任务并等待完成
-  auto result = co_await channel_->send(std::move(input));
-  co_return result;
-}
-
-void FfmpegTaskService::submitTaskAsync(
-    FfmpegTaskType type, const std::vector<std::string> &files,
-    const std::vector<std::string> &outputFiles,
-    std::function<void(std::optional<std::string>)> resultCallback,
-    std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> callback,
-    std::function<void(std::weak_ptr<FfmpegTaskProcDetail>)> customFunc) {
-
-  if (!channel_) {
-    LOG_ERROR << "FfmpegTaskService::submitTaskAsync: channel_ 未初始化";
-    if (resultCallback) {
-      resultCallback(std::nullopt);
-    }
-    return;
-  }
-
-  // 根据类型获取处理函数
-  auto taskFunc = getTaskFunc(type);
-  if (!taskFunc) {
-    if (customFunc) {
-      taskFunc = customFunc;
-    } else {
-      LOG_ERROR << "FfmpegTaskService::submitTaskAsync: "
-                   "未知任务类型且未提供自定义函数";
-      if (resultCallback) {
-        resultCallback(std::nullopt);
-      }
       return;
     }
   }
 
-  // 构造任务输入
   FfmpegTaskInput input;
   input.type = type;
   input.files = files;
@@ -723,8 +776,7 @@ void FfmpegTaskService::submitTaskAsync(
   input.func = taskFunc;
   input.callback = callback;
 
-  // 通过 channel 异步发送任务
-  channel_->sendAsync(std::move(input), resultCallback);
+  channel_->submit(std::move(input), std::move(onComplete));
 }
 
 std::vector<FfmpegTaskProcess> FfmpegTaskService::getRunningTasks() {

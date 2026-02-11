@@ -25,13 +25,8 @@ void HistoryController::getAll(
   for (const auto &r : records) {
     Json::Value item;
     item["id"] = r.id;
-    item["filepath"] = r.filepath;
-    // Extract filename from filepath
-    size_t lastSlash = r.filepath.find_last_of("/\\");
-    std::string filename = (lastSlash == std::string::npos)
-                               ? r.filepath
-                               : r.filepath.substr(lastSlash + 1);
-    item["filename"] = filename;
+    item["filepath"] = r.getFilepath();
+    item["filename"] = r.filename;
     item["fingerprint"] = r.fingerprint;
     item["start_time"] = r.start_time;
     item["end_time"] = r.end_time;

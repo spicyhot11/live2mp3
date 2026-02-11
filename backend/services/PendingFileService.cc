@@ -1,27 +1,75 @@
 #include "PendingFileService.h"
+#include "../utils/FfmpegUtils.h"
 #include "ConfigService.h"
 #include "DatabaseService.h"
 #include "MergerService.h"
-#include "../utils/FfmpegUtils.h"
 #include <drogon/drogon.h>
 #include <filesystem>
 #include <iomanip>
-#include <sstream>
 #include <sqlite3.h>
+#include <sstream>
 
 namespace fs = std::filesystem;
 
-void to_json(nlohmann::json &j, const PendingFile &p) {
-  j = nlohmann::json{{"id", p.id},
-                     {"filepath", p.filepath},
-                     {"fingerprint", p.fingerprint},
-                     {"stable_count", p.stable_count},
-                     {"status", p.status},
-                     {"temp_mp4_path", p.temp_mp4_path},
-                     {"temp_mp3_path", p.temp_mp3_path},
-                     {"start_time", p.start_time},
-                     {"end_time", p.end_time},};
+// PendingFile 便捷方法
+std::string PendingFile::getFilepath() const {
+  if (dir_path.empty())
+    return filename;
+  if (dir_path.back() == '/')
+    return dir_path + filename;
+  return dir_path + "/" + filename;
 }
+
+void to_json(nlohmann::json &j, const PendingFile &p) {
+  j = nlohmann::json{
+      {"id", p.id},
+      {"dir_path", p.dir_path},
+      {"filename", p.filename},
+      {"filepath", p.getFilepath()},
+      {"fingerprint", p.fingerprint},
+      {"stable_count", p.stable_count},
+      {"status", p.status},
+      {"temp_mp4_path", p.temp_mp4_path},
+      {"temp_mp3_path", p.temp_mp3_path},
+      {"start_time", p.start_time},
+      {"end_time", p.end_time},
+  };
+}
+
+// 辅助：从完整路径拆分为 dir_path + filename
+static void splitPath(const std::string &filepath, std::string &dir_path,
+                      std::string &filename) {
+  fs::path p(filepath);
+  dir_path = p.parent_path().string();
+  filename = p.filename().string();
+}
+
+// 辅助：从 SQLite 行读取 PendingFile
+// 列顺序: id, dir_path, filename, fingerprint, stable_count, status,
+//          temp_mp4_path, temp_mp3_path, start_time, end_time
+static PendingFile readRow(sqlite3_stmt *stmt) {
+  PendingFile f;
+  f.id = sqlite3_column_int(stmt, 0);
+  f.dir_path = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+  f.filename = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
+  auto fpText = sqlite3_column_text(stmt, 3);
+  f.fingerprint = fpText ? reinterpret_cast<const char *>(fpText) : "";
+  f.stable_count = sqlite3_column_int(stmt, 4);
+  f.status = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 5));
+  auto mp4Text = sqlite3_column_text(stmt, 6);
+  f.temp_mp4_path = mp4Text ? reinterpret_cast<const char *>(mp4Text) : "";
+  auto mp3Text = sqlite3_column_text(stmt, 7);
+  f.temp_mp3_path = mp3Text ? reinterpret_cast<const char *>(mp3Text) : "";
+  auto stText = sqlite3_column_text(stmt, 8);
+  f.start_time = stText ? reinterpret_cast<const char *>(stText) : "";
+  auto etText = sqlite3_column_text(stmt, 9);
+  f.end_time = etText ? reinterpret_cast<const char *>(etText) : "";
+  return f;
+}
+
+static const char *SELECT_COLS =
+    "id, dir_path, filename, fingerprint, stable_count, status, "
+    "temp_mp4_path, temp_mp3_path, start_time, end_time";
 
 void PendingFileService::initAndStart(const Json::Value &config) {
   LOG_INFO << "PendingFileService initialized";
@@ -39,6 +87,9 @@ int PendingFileService::addOrUpdateFile(const std::string &filepath,
     return -1;
   }
 
+  std::string dirPath, fname;
+  splitPath(filepath, dirPath, fname);
+
   // Check if file exists
   auto existing = getFile(filepath);
 
@@ -47,8 +98,6 @@ int PendingFileService::addOrUpdateFile(const std::string &filepath,
     if (existing->fingerprint == fingerprint) {
       // Fingerprint matches. Check status.
       if (existing->status != "pending") {
-        // If file is already processed or processing, and fingerprint hasn't
-        // changed, ignore it. This prevents re-processing completed files.
         LOG_DEBUG << "[addOrUpdateFile] File " << filepath << " is "
                   << existing->status << " with same fingerprint. Ignoring.";
         return -1;
@@ -57,14 +106,16 @@ int PendingFileService::addOrUpdateFile(const std::string &filepath,
       // Same fingerprint and pending, increment stable_count
       std::string sql =
           "UPDATE pending_files SET stable_count = stable_count + 1, "
-          "updated_at = datetime('now', 'localtime') WHERE filepath = ?";
+          "updated_at = datetime('now', 'localtime') "
+          "WHERE dir_path = ? AND filename = ?";
       sqlite3_stmt *stmt;
       if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
         LOG_ERROR << "[addOrUpdateFile] Failed to prepare update: "
                   << sqlite3_errmsg(db);
         return -1;
       }
-      sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+      sqlite3_bind_text(stmt, 1, dirPath.c_str(), -1, SQLITE_STATIC);
+      sqlite3_bind_text(stmt, 2, fname.c_str(), -1, SQLITE_STATIC);
 
       int result = -1;
       if (sqlite3_step(stmt) == SQLITE_DONE) {
@@ -83,9 +134,8 @@ int PendingFileService::addOrUpdateFile(const std::string &filepath,
           << "[addOrUpdateFile] Fingerprint changed, resetting stable_count";
       std::string sql =
           "UPDATE pending_files SET fingerprint = ?, stable_count = 1, "
-          "status = 'pending', updated_at = datetime('now', 'localtime') WHERE "
-          "filepath = "
-          "?";
+          "status = 'pending', updated_at = datetime('now', 'localtime') "
+          "WHERE dir_path = ? AND filename = ?";
       sqlite3_stmt *stmt;
       if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
         LOG_ERROR << "[addOrUpdateFile] Failed to prepare reset: "
@@ -93,7 +143,8 @@ int PendingFileService::addOrUpdateFile(const std::string &filepath,
         return -1;
       }
       sqlite3_bind_text(stmt, 1, fingerprint.c_str(), -1, SQLITE_STATIC);
-      sqlite3_bind_text(stmt, 2, filepath.c_str(), -1, SQLITE_STATIC);
+      sqlite3_bind_text(stmt, 2, dirPath.c_str(), -1, SQLITE_STATIC);
+      sqlite3_bind_text(stmt, 3, fname.c_str(), -1, SQLITE_STATIC);
 
       int result = -1;
       if (sqlite3_step(stmt) == SQLITE_DONE) {
@@ -108,17 +159,18 @@ int PendingFileService::addOrUpdateFile(const std::string &filepath,
     // New file, insert
     LOG_DEBUG << "[addOrUpdateFile] New file, inserting: " << filepath;
     std::string sql =
-        "INSERT INTO pending_files (filepath, fingerprint, "
+        "INSERT INTO pending_files (dir_path, filename, fingerprint, "
         "stable_count, status) "
-        "VALUES (?, ?, 1, 'pending')";
+        "VALUES (?, ?, ?, 1, 'pending')";
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
       LOG_ERROR << "[addOrUpdateFile] Failed to prepare insert: "
                 << sqlite3_errmsg(db);
       return -1;
     }
-    sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, fingerprint.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 1, dirPath.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, fname.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, fingerprint.c_str(), -1, SQLITE_STATIC);
 
     int result = -1;
     if (sqlite3_step(stmt) == SQLITE_DONE) {
@@ -139,9 +191,8 @@ std::vector<PendingFile> PendingFileService::getStableFiles(int minCount) {
     return files;
 
   std::string sql =
-      "SELECT id, filepath, fingerprint, stable_count, status, "
-      "temp_mp4_path, temp_mp3_path, start_time, end_time "
-      "FROM pending_files WHERE stable_count >= ? AND status = 'pending'";
+      std::string("SELECT ") + SELECT_COLS +
+      " FROM pending_files WHERE stable_count >= ? AND status = 'pending'";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
@@ -152,22 +203,7 @@ std::vector<PendingFile> PendingFileService::getStableFiles(int minCount) {
   sqlite3_bind_int(stmt, 1, minCount);
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
-    PendingFile f;
-    f.id = sqlite3_column_int(stmt, 0);
-    f.filepath = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    auto md5Text = sqlite3_column_text(stmt, 2);
-    f.fingerprint = md5Text ? reinterpret_cast<const char *>(md5Text) : "";
-    f.stable_count = sqlite3_column_int(stmt, 3);
-    f.status = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
-    auto mp4Text = sqlite3_column_text(stmt, 5);
-    f.temp_mp4_path = mp4Text ? reinterpret_cast<const char *>(mp4Text) : "";
-    auto mp3Text = sqlite3_column_text(stmt, 6);
-    f.temp_mp3_path = mp3Text ? reinterpret_cast<const char *>(mp3Text) : "";
-    auto stText = sqlite3_column_text(stmt, 7);
-    f.start_time = stText ? reinterpret_cast<const char *>(stText) : "";
-    auto etText = sqlite3_column_text(stmt, 8);
-    f.end_time = etText ? reinterpret_cast<const char *>(etText) : "";
-    files.push_back(f);
+    files.push_back(readRow(stmt));
   }
 
   sqlite3_finalize(stmt);
@@ -177,13 +213,14 @@ std::vector<PendingFile> PendingFileService::getStableFiles(int minCount) {
 bool PendingFileService::markAsStable(const std::string &filepath) {
   sqlite3 *db = DatabaseService::getInstance().getDb();
 
+  std::string dirPath, fname;
+  splitPath(filepath, dirPath, fname);
+
   // 1. Parse start_time from filename
   std::string startTimeStr;
   std::string endTimeStr;
 
-  fs::path fsPath(filepath);
-  std::string filename = fsPath.filename().string();
-  auto parsedTime = MergerService::parseTime(filename);
+  auto parsedTime = MergerService::parseTime(fname);
 
   if (parsedTime.has_value()) {
     // 2. Get media duration
@@ -211,13 +248,12 @@ bool PendingFileService::markAsStable(const std::string &filepath) {
     endSs << std::put_time(&endTm, "%Y-%m-%d %H:%M:%S");
     endTimeStr = endSs.str();
   }
-  // If parseTime fails, start_time/end_time stay empty (not corrupted)
 
   // 3. Update DB
-  std::string sql =
-      "UPDATE pending_files SET status = 'stable', "
-      "start_time = ?, end_time = ?, "
-      "updated_at = datetime('now', 'localtime') WHERE filepath = ?";
+  std::string sql = "UPDATE pending_files SET status = 'stable', "
+                    "start_time = ?, end_time = ?, "
+                    "updated_at = datetime('now', 'localtime') "
+                    "WHERE dir_path = ? AND filename = ?";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
@@ -235,14 +271,15 @@ bool PendingFileService::markAsStable(const std::string &filepath) {
   } else {
     sqlite3_bind_text(stmt, 2, endTimeStr.c_str(), -1, SQLITE_TRANSIENT);
   }
-  sqlite3_bind_text(stmt, 3, filepath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 3, dirPath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 4, fname.c_str(), -1, SQLITE_STATIC);
 
   bool success = (sqlite3_step(stmt) == SQLITE_DONE);
   sqlite3_finalize(stmt);
   if (success) {
     LOG_DEBUG << "[markAsStable] Marked as stable: " << filepath
-              << " (start_time=" << startTimeStr
-              << ", end_time=" << endTimeStr << ")";
+              << " (start_time=" << startTimeStr << ", end_time=" << endTimeStr
+              << ")";
     // 检测并处理同名不同扩展名的文件
     resolveDuplicateExtensions(filepath);
   }
@@ -255,9 +292,8 @@ std::vector<PendingFile> PendingFileService::getAllStableFiles() {
   if (!db)
     return files;
 
-  std::string sql = "SELECT id, filepath, fingerprint, stable_count, status, "
-                    "temp_mp4_path, temp_mp3_path, start_time, end_time "
-                    "FROM pending_files WHERE status = 'stable'";
+  std::string sql = std::string("SELECT ") + SELECT_COLS +
+                    " FROM pending_files WHERE status = 'stable'";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
@@ -266,22 +302,7 @@ std::vector<PendingFile> PendingFileService::getAllStableFiles() {
   }
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
-    PendingFile f;
-    f.id = sqlite3_column_int(stmt, 0);
-    f.filepath = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    auto md5Text = sqlite3_column_text(stmt, 2);
-    f.fingerprint = md5Text ? reinterpret_cast<const char *>(md5Text) : "";
-    f.stable_count = sqlite3_column_int(stmt, 3);
-    f.status = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
-    auto mp4Text = sqlite3_column_text(stmt, 5);
-    f.temp_mp4_path = mp4Text ? reinterpret_cast<const char *>(mp4Text) : "";
-    auto mp3Text = sqlite3_column_text(stmt, 6);
-    f.temp_mp3_path = mp3Text ? reinterpret_cast<const char *>(mp3Text) : "";
-    auto stText = sqlite3_column_text(stmt, 7);
-    f.start_time = stText ? reinterpret_cast<const char *>(stText) : "";
-    auto etText = sqlite3_column_text(stmt, 8);
-    f.end_time = etText ? reinterpret_cast<const char *>(etText) : "";
-    files.push_back(f);
+    files.push_back(readRow(stmt));
   }
 
   sqlite3_finalize(stmt);
@@ -294,21 +315,16 @@ std::vector<PendingFile> PendingFileService::getAndClaimStableFiles() {
   if (!db)
     return files;
 
-  // 使用 IMMEDIATE 事务，在开始时就获取写锁
-  // 这样可以防止其他线程同时读取和修改
   if (sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION", nullptr, nullptr,
                    nullptr) != SQLITE_OK) {
-    // 可能是其他线程正在持有锁，这是正常的并发情况
     LOG_DEBUG << "[getAndClaimStableFiles] 无法获取数据库锁，可能存在并发任务: "
               << sqlite3_errmsg(db);
     return files;
   }
 
   // 1. 查询所有 stable 状态的文件
-  std::string selectSql =
-      "SELECT id, filepath, fingerprint, stable_count, status, "
-      "temp_mp4_path, temp_mp3_path, start_time, end_time "
-      "FROM pending_files WHERE status = 'stable'";
+  std::string selectSql = std::string("SELECT ") + SELECT_COLS +
+                          " FROM pending_files WHERE status = 'stable'";
   sqlite3_stmt *selectStmt;
 
   if (sqlite3_prepare_v2(db, selectSql.c_str(), -1, &selectStmt, 0) !=
@@ -321,25 +337,8 @@ std::vector<PendingFile> PendingFileService::getAndClaimStableFiles() {
 
   std::vector<int> fileIds;
   while (sqlite3_step(selectStmt) == SQLITE_ROW) {
-    PendingFile f;
-    f.id = sqlite3_column_int(selectStmt, 0);
-    f.filepath =
-        reinterpret_cast<const char *>(sqlite3_column_text(selectStmt, 1));
-    auto md5Text = sqlite3_column_text(selectStmt, 2);
-    f.fingerprint = md5Text ? reinterpret_cast<const char *>(md5Text) : "";
-    f.stable_count = sqlite3_column_int(selectStmt, 3);
-    f.status =
-        reinterpret_cast<const char *>(sqlite3_column_text(selectStmt, 4));
-    auto mp4Text = sqlite3_column_text(selectStmt, 5);
-    f.temp_mp4_path = mp4Text ? reinterpret_cast<const char *>(mp4Text) : "";
-    auto mp3Text = sqlite3_column_text(selectStmt, 6);
-    f.temp_mp3_path = mp3Text ? reinterpret_cast<const char *>(mp3Text) : "";
-    auto stText = sqlite3_column_text(selectStmt, 7);
-    f.start_time = stText ? reinterpret_cast<const char *>(stText) : "";
-    auto etText = sqlite3_column_text(selectStmt, 8);
-    f.end_time = etText ? reinterpret_cast<const char *>(etText) : "";
-    files.push_back(f);
-    fileIds.push_back(f.id);
+    files.push_back(readRow(selectStmt));
+    fileIds.push_back(files.back().id);
   }
   sqlite3_finalize(selectStmt);
 
@@ -386,7 +385,6 @@ std::vector<PendingFile> PendingFileService::getAndClaimStableFiles() {
   LOG_INFO << "[getAndClaimStableFiles] Atomically claimed " << files.size()
            << " stable files";
 
-  // 更新返回结果中的状态（因为我们已经更新了数据库）
   for (auto &f : files) {
     f.status = "processing";
   }
@@ -395,9 +393,12 @@ std::vector<PendingFile> PendingFileService::getAndClaimStableFiles() {
 }
 
 bool PendingFileService::markAsProcessing(const std::string &filepath) {
-  std::string sql =
-      "UPDATE pending_files SET status = 'processing', "
-      "updated_at = datetime('now', 'localtime') WHERE filepath = ?";
+  std::string dirPath, fname;
+  splitPath(filepath, dirPath, fname);
+
+  std::string sql = "UPDATE pending_files SET status = 'processing', "
+                    "updated_at = datetime('now', 'localtime') "
+                    "WHERE dir_path = ? AND filename = ?";
   sqlite3 *db = DatabaseService::getInstance().getDb();
   sqlite3_stmt *stmt;
 
@@ -405,7 +406,8 @@ bool PendingFileService::markAsProcessing(const std::string &filepath) {
     LOG_ERROR << "[markAsProcessing] Failed to prepare: " << sqlite3_errmsg(db);
     return false;
   }
-  sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 1, dirPath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, fname.c_str(), -1, SQLITE_STATIC);
   bool success = (sqlite3_step(stmt) == SQLITE_DONE);
   sqlite3_finalize(stmt);
   if (success) {
@@ -425,7 +427,6 @@ bool PendingFileService::markAsProcessingBatch(
     return false;
   }
 
-  // 开始事务（使用 IMMEDIATE 锁定数据库，防止并发修改）
   if (sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION", nullptr, nullptr,
                    nullptr) != SQLITE_OK) {
     LOG_ERROR << "[markAsProcessingBatch] Failed to begin transaction: "
@@ -433,11 +434,9 @@ bool PendingFileService::markAsProcessingBatch(
     return false;
   }
 
-  // 条件更新：只有状态为 'stable' 时才能更新为 'processing'
-  // 这样如果另一个线程已经拿走了这个文件，更新将不会生效
   std::string sql = "UPDATE pending_files SET status = 'processing', "
                     "updated_at = datetime('now', 'localtime') "
-                    "WHERE filepath = ? AND status = 'stable'";
+                    "WHERE dir_path = ? AND filename = ? AND status = 'stable'";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
@@ -449,18 +448,20 @@ bool PendingFileService::markAsProcessingBatch(
 
   int totalUpdated = 0;
   for (const auto &filepath : filepaths) {
+    std::string dirPath, fname;
+    splitPath(filepath, dirPath, fname);
+
     sqlite3_reset(stmt);
-    sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 1, dirPath.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, fname.c_str(), -1, SQLITE_STATIC);
     if (sqlite3_step(stmt) != SQLITE_DONE) {
       LOG_ERROR << "[markAsProcessingBatch] Failed to update: " << filepath;
       sqlite3_finalize(stmt);
       sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
       return false;
     }
-    // 检查实际更新的行数
     int changes = sqlite3_changes(db);
     if (changes == 0) {
-      // 文件状态不是 stable，可能已被其他线程处理
       LOG_WARN << "[markAsProcessingBatch] File not in stable state, "
                   "skipping: "
                << filepath;
@@ -470,15 +471,12 @@ bool PendingFileService::markAsProcessingBatch(
 
   sqlite3_finalize(stmt);
 
-  // 验证：如果没有任何文件被成功标记，回滚事务
   if (totalUpdated == 0) {
-    LOG_WARN << "[markAsProcessingBatch] No files were marked as processing "
-                "(all may have been claimed by another thread)";
+    LOG_WARN << "[markAsProcessingBatch] No files were marked as processing";
     sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     return false;
   }
 
-  // 提交事务
   if (sqlite3_exec(db, "COMMIT", nullptr, nullptr, nullptr) != SQLITE_OK) {
     LOG_ERROR << "[markAsProcessingBatch] Failed to commit transaction";
     sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
@@ -501,16 +499,15 @@ bool PendingFileService::rollbackToStable(
     return false;
   }
 
-  // 开始事务
   if (sqlite3_exec(db, "BEGIN TRANSACTION", nullptr, nullptr, nullptr) !=
       SQLITE_OK) {
     LOG_ERROR << "[rollbackToStable] Failed to begin transaction";
     return false;
   }
 
-  std::string sql =
-      "UPDATE pending_files SET status = 'stable', "
-      "updated_at = datetime('now', 'localtime') WHERE filepath = ?";
+  std::string sql = "UPDATE pending_files SET status = 'stable', "
+                    "updated_at = datetime('now', 'localtime') "
+                    "WHERE dir_path = ? AND filename = ?";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
@@ -520,8 +517,12 @@ bool PendingFileService::rollbackToStable(
   }
 
   for (const auto &filepath : filepaths) {
+    std::string dirPath, fname;
+    splitPath(filepath, dirPath, fname);
+
     sqlite3_reset(stmt);
-    sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 1, dirPath.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, fname.c_str(), -1, SQLITE_STATIC);
     if (sqlite3_step(stmt) != SQLITE_DONE) {
       LOG_ERROR << "[rollbackToStable] Failed to rollback: " << filepath;
       sqlite3_finalize(stmt);
@@ -532,7 +533,6 @@ bool PendingFileService::rollbackToStable(
 
   sqlite3_finalize(stmt);
 
-  // 提交事务
   if (sqlite3_exec(db, "COMMIT", nullptr, nullptr, nullptr) != SQLITE_OK) {
     LOG_ERROR << "[rollbackToStable] Failed to commit transaction";
     sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
@@ -545,16 +545,20 @@ bool PendingFileService::rollbackToStable(
 }
 
 bool PendingFileService::markAsConverting(const std::string &filepath) {
-  std::string sql =
-      "UPDATE pending_files SET status = 'converting', "
-      "updated_at = datetime('now', 'localtime') WHERE filepath = ?";
+  std::string dirPath, fname;
+  splitPath(filepath, dirPath, fname);
+
+  std::string sql = "UPDATE pending_files SET status = 'converting', "
+                    "updated_at = datetime('now', 'localtime') "
+                    "WHERE dir_path = ? AND filename = ?";
   sqlite3 *db = DatabaseService::getInstance().getDb();
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
     return false;
   }
-  sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 1, dirPath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, fname.c_str(), -1, SQLITE_STATIC);
   bool success = (sqlite3_step(stmt) == SQLITE_DONE);
   sqlite3_finalize(stmt);
   return success;
@@ -562,9 +566,13 @@ bool PendingFileService::markAsConverting(const std::string &filepath) {
 
 bool PendingFileService::markAsStaged(const std::string &filepath,
                                       const std::string &tempMp4Path) {
+  std::string dirPath, fname;
+  splitPath(filepath, dirPath, fname);
+
   std::string sql =
       "UPDATE pending_files SET status = 'staged', temp_mp4_path = ?, "
-      "updated_at = datetime('now', 'localtime') WHERE filepath = ?";
+      "updated_at = datetime('now', 'localtime') "
+      "WHERE dir_path = ? AND filename = ?";
   sqlite3 *db = DatabaseService::getInstance().getDb();
   sqlite3_stmt *stmt;
 
@@ -572,23 +580,28 @@ bool PendingFileService::markAsStaged(const std::string &filepath,
     return false;
   }
   sqlite3_bind_text(stmt, 1, tempMp4Path.c_str(), -1, SQLITE_STATIC);
-  sqlite3_bind_text(stmt, 2, filepath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, dirPath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 3, fname.c_str(), -1, SQLITE_STATIC);
   bool success = (sqlite3_step(stmt) == SQLITE_DONE);
   sqlite3_finalize(stmt);
   return success;
 }
 
 bool PendingFileService::markAsCompleted(const std::string &filepath) {
-  std::string sql =
-      "UPDATE pending_files SET status = 'completed', "
-      "updated_at = datetime('now', 'localtime') WHERE filepath = ?";
+  std::string dirPath, fname;
+  splitPath(filepath, dirPath, fname);
+
+  std::string sql = "UPDATE pending_files SET status = 'completed', "
+                    "updated_at = datetime('now', 'localtime') "
+                    "WHERE dir_path = ? AND filename = ?";
   sqlite3 *db = DatabaseService::getInstance().getDb();
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
     return false;
   }
-  sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 1, dirPath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, fname.c_str(), -1, SQLITE_STATIC);
   bool success = (sqlite3_step(stmt) == SQLITE_DONE);
   sqlite3_finalize(stmt);
   return success;
@@ -601,11 +614,9 @@ PendingFileService::getStagedFilesOlderThan(int seconds) {
   if (!db)
     return files;
 
-  // Get staged files where updated_at is older than N seconds ago
   std::string sql =
-      "SELECT id, filepath, fingerprint, stable_count, status, "
-      "temp_mp4_path, temp_mp3_path, start_time, end_time "
-      "FROM pending_files WHERE status = 'staged' "
+      std::string("SELECT ") + SELECT_COLS +
+      " FROM pending_files WHERE status = 'staged' "
       "AND datetime(updated_at, '+' || ? || ' seconds') <= datetime('now')";
   sqlite3_stmt *stmt;
 
@@ -617,22 +628,7 @@ PendingFileService::getStagedFilesOlderThan(int seconds) {
   sqlite3_bind_int(stmt, 1, seconds);
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
-    PendingFile f;
-    f.id = sqlite3_column_int(stmt, 0);
-    f.filepath = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    auto md5Text = sqlite3_column_text(stmt, 2);
-    f.fingerprint = md5Text ? reinterpret_cast<const char *>(md5Text) : "";
-    f.stable_count = sqlite3_column_int(stmt, 3);
-    f.status = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
-    auto mp4Text = sqlite3_column_text(stmt, 5);
-    f.temp_mp4_path = mp4Text ? reinterpret_cast<const char *>(mp4Text) : "";
-    auto mp3Text = sqlite3_column_text(stmt, 6);
-    f.temp_mp3_path = mp3Text ? reinterpret_cast<const char *>(mp3Text) : "";
-    auto stText = sqlite3_column_text(stmt, 7);
-    f.start_time = stText ? reinterpret_cast<const char *>(stText) : "";
-    auto etText = sqlite3_column_text(stmt, 8);
-    f.end_time = etText ? reinterpret_cast<const char *>(etText) : "";
-    files.push_back(f);
+    files.push_back(readRow(stmt));
   }
 
   sqlite3_finalize(stmt);
@@ -645,10 +641,8 @@ std::vector<PendingFile> PendingFileService::getAllStagedFiles() {
   if (!db)
     return files;
 
-  // Get all staged files regardless of time
-  std::string sql = "SELECT id, filepath, fingerprint, stable_count, status, "
-                    "temp_mp4_path, temp_mp3_path, start_time, end_time "
-                    "FROM pending_files WHERE status = 'staged'";
+  std::string sql = std::string("SELECT ") + SELECT_COLS +
+                    " FROM pending_files WHERE status = 'staged'";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
@@ -657,22 +651,7 @@ std::vector<PendingFile> PendingFileService::getAllStagedFiles() {
   }
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
-    PendingFile f;
-    f.id = sqlite3_column_int(stmt, 0);
-    f.filepath = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    auto md5Text = sqlite3_column_text(stmt, 2);
-    f.fingerprint = md5Text ? reinterpret_cast<const char *>(md5Text) : "";
-    f.stable_count = sqlite3_column_int(stmt, 3);
-    f.status = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
-    auto mp4Text = sqlite3_column_text(stmt, 5);
-    f.temp_mp4_path = mp4Text ? reinterpret_cast<const char *>(mp4Text) : "";
-    auto mp3Text = sqlite3_column_text(stmt, 6);
-    f.temp_mp3_path = mp3Text ? reinterpret_cast<const char *>(mp3Text) : "";
-    auto stText = sqlite3_column_text(stmt, 7);
-    f.start_time = stText ? reinterpret_cast<const char *>(stText) : "";
-    auto etText = sqlite3_column_text(stmt, 8);
-    f.end_time = etText ? reinterpret_cast<const char *>(etText) : "";
-    files.push_back(f);
+    files.push_back(readRow(stmt));
   }
 
   sqlite3_finalize(stmt);
@@ -680,14 +659,19 @@ std::vector<PendingFile> PendingFileService::getAllStagedFiles() {
 }
 
 bool PendingFileService::removeFile(const std::string &filepath) {
-  std::string sql = "DELETE FROM pending_files WHERE filepath = ?";
+  std::string dirPath, fname;
+  splitPath(filepath, dirPath, fname);
+
+  std::string sql =
+      "DELETE FROM pending_files WHERE dir_path = ? AND filename = ?";
   sqlite3 *db = DatabaseService::getInstance().getDb();
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
     return false;
   }
-  sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 1, dirPath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, fname.c_str(), -1, SQLITE_STATIC);
   bool success = (sqlite3_step(stmt) == SQLITE_DONE);
   sqlite3_finalize(stmt);
   return success;
@@ -713,33 +697,22 @@ PendingFileService::getFile(const std::string &filepath) {
   if (!db)
     return std::nullopt;
 
-  std::string sql = "SELECT id, filepath, fingerprint, stable_count, status, "
-                    "temp_mp4_path, temp_mp3_path, start_time, end_time "
-                    "FROM pending_files WHERE filepath = ?";
+  std::string dirPath, fname;
+  splitPath(filepath, dirPath, fname);
+
+  std::string sql = std::string("SELECT ") + SELECT_COLS +
+                    " FROM pending_files WHERE dir_path = ? AND filename = ?";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
     return std::nullopt;
   }
 
-  sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 1, dirPath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, fname.c_str(), -1, SQLITE_STATIC);
 
   if (sqlite3_step(stmt) == SQLITE_ROW) {
-    PendingFile f;
-    f.id = sqlite3_column_int(stmt, 0);
-    f.filepath = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    auto md5Text = sqlite3_column_text(stmt, 2);
-    f.fingerprint = md5Text ? reinterpret_cast<const char *>(md5Text) : "";
-    f.stable_count = sqlite3_column_int(stmt, 3);
-    f.status = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
-    auto mp4Text = sqlite3_column_text(stmt, 5);
-    f.temp_mp4_path = mp4Text ? reinterpret_cast<const char *>(mp4Text) : "";
-    auto mp3Text = sqlite3_column_text(stmt, 6);
-    f.temp_mp3_path = mp3Text ? reinterpret_cast<const char *>(mp3Text) : "";
-    auto stText = sqlite3_column_text(stmt, 7);
-    f.start_time = stText ? reinterpret_cast<const char *>(stText) : "";
-    auto etText = sqlite3_column_text(stmt, 8);
-    f.end_time = etText ? reinterpret_cast<const char *>(etText) : "";
+    auto f = readRow(stmt);
     sqlite3_finalize(stmt);
     return f;
   }
@@ -781,9 +754,8 @@ std::vector<PendingFile> PendingFileService::getCompletedFiles() {
   if (!db)
     return files;
 
-  std::string sql = "SELECT id, filepath, fingerprint, stable_count, status, "
-                    "temp_mp4_path, temp_mp3_path, start_time, end_time "
-                    "FROM pending_files WHERE status = 'completed' ORDER BY "
+  std::string sql = std::string("SELECT ") + SELECT_COLS +
+                    " FROM pending_files WHERE status = 'completed' ORDER BY "
                     "updated_at DESC";
   sqlite3_stmt *stmt;
 
@@ -793,22 +765,7 @@ std::vector<PendingFile> PendingFileService::getCompletedFiles() {
   }
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
-    PendingFile f;
-    f.id = sqlite3_column_int(stmt, 0);
-    f.filepath = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    auto md5Text = sqlite3_column_text(stmt, 2);
-    f.fingerprint = md5Text ? reinterpret_cast<const char *>(md5Text) : "";
-    f.stable_count = sqlite3_column_int(stmt, 3);
-    f.status = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
-    auto mp4Text = sqlite3_column_text(stmt, 5);
-    f.temp_mp4_path = mp4Text ? reinterpret_cast<const char *>(mp4Text) : "";
-    auto mp3Text = sqlite3_column_text(stmt, 6);
-    f.temp_mp3_path = mp3Text ? reinterpret_cast<const char *>(mp3Text) : "";
-    auto stText = sqlite3_column_text(stmt, 7);
-    f.start_time = stText ? reinterpret_cast<const char *>(stText) : "";
-    auto etText = sqlite3_column_text(stmt, 8);
-    f.end_time = etText ? reinterpret_cast<const char *>(etText) : "";
-    files.push_back(f);
+    files.push_back(readRow(stmt));
   }
 
   sqlite3_finalize(stmt);
@@ -821,9 +778,8 @@ std::vector<PendingFile> PendingFileService::getAll() {
   if (!db)
     return files;
 
-  std::string sql = "SELECT id, filepath, fingerprint, stable_count, status, "
-                    "temp_mp4_path, temp_mp3_path, start_time, end_time "
-                    "FROM pending_files ORDER BY updated_at DESC";
+  std::string sql = std::string("SELECT ") + SELECT_COLS +
+                    " FROM pending_files ORDER BY updated_at DESC";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
@@ -831,22 +787,7 @@ std::vector<PendingFile> PendingFileService::getAll() {
   }
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
-    PendingFile f;
-    f.id = sqlite3_column_int(stmt, 0);
-    f.filepath = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-    auto md5Text = sqlite3_column_text(stmt, 2);
-    f.fingerprint = md5Text ? reinterpret_cast<const char *>(md5Text) : "";
-    f.stable_count = sqlite3_column_int(stmt, 3);
-    f.status = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
-    auto mp4Text = sqlite3_column_text(stmt, 5);
-    f.temp_mp4_path = mp4Text ? reinterpret_cast<const char *>(mp4Text) : "";
-    auto mp3Text = sqlite3_column_text(stmt, 6);
-    f.temp_mp3_path = mp3Text ? reinterpret_cast<const char *>(mp3Text) : "";
-    auto stText = sqlite3_column_text(stmt, 7);
-    f.start_time = stText ? reinterpret_cast<const char *>(stText) : "";
-    auto etText = sqlite3_column_text(stmt, 8);
-    f.end_time = etText ? reinterpret_cast<const char *>(etText) : "";
-    files.push_back(f);
+    files.push_back(readRow(stmt));
   }
 
   sqlite3_finalize(stmt);
@@ -854,9 +795,12 @@ std::vector<PendingFile> PendingFileService::getAll() {
 }
 
 bool PendingFileService::markAsDeprecated(const std::string &filepath) {
-  std::string sql =
-      "UPDATE pending_files SET status = 'deprecated', "
-      "updated_at = datetime('now', 'localtime') WHERE filepath = ?";
+  std::string dirPath, fname;
+  splitPath(filepath, dirPath, fname);
+
+  std::string sql = "UPDATE pending_files SET status = 'deprecated', "
+                    "updated_at = datetime('now', 'localtime') "
+                    "WHERE dir_path = ? AND filename = ?";
   sqlite3 *db = DatabaseService::getInstance().getDb();
   sqlite3_stmt *stmt;
 
@@ -864,7 +808,8 @@ bool PendingFileService::markAsDeprecated(const std::string &filepath) {
     LOG_ERROR << "[markAsDeprecated] Failed to prepare: " << sqlite3_errmsg(db);
     return false;
   }
-  sqlite3_bind_text(stmt, 1, filepath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 1, dirPath.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, fname.c_str(), -1, SQLITE_STATIC);
   bool success = (sqlite3_step(stmt) == SQLITE_DONE);
   sqlite3_finalize(stmt);
   if (success) {
@@ -885,12 +830,12 @@ void PendingFileService::resolveDuplicateExtensions(
   std::string dir = path.parent_path().string();
 
   // 2. 查询同目录下同 stem 但不同扩展名的 stable 文件
-  // 使用 LIKE 模式匹配：目录/stem.%
-  std::string pattern = (fs::path(dir) / (stem + ".%")).string();
+  // 使用 LIKE 模式匹配 filename: stem.%
+  std::string pattern = stem + ".%";
   std::string sql =
-      "SELECT id, filepath, fingerprint, stable_count, status, "
-      "temp_mp4_path, temp_mp3_path, start_time, end_time "
-      "FROM pending_files WHERE filepath LIKE ? AND status = 'stable'";
+      std::string("SELECT ") + SELECT_COLS +
+      " FROM pending_files WHERE dir_path = ? AND filename LIKE ? "
+      "AND status = 'stable'";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
@@ -899,7 +844,8 @@ void PendingFileService::resolveDuplicateExtensions(
     return;
   }
 
-  sqlite3_bind_text(stmt, 1, pattern.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 1, dir.c_str(), -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, pattern.c_str(), -1, SQLITE_STATIC);
 
   // 收集所有匹配的 stable 文件
   struct FileInfo {
@@ -909,10 +855,10 @@ void PendingFileService::resolveDuplicateExtensions(
   std::vector<FileInfo> candidates;
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
-    std::string candidatePath =
-        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+    auto pf = readRow(stmt);
+    std::string candidatePath = pf.getFilepath();
 
-    // 验证：确保 stem 完全匹配（避免 "video.flv" 匹配 "video_1.flv"）
+    // 验证：确保 stem 完全匹配
     fs::path candidateFsPath(candidatePath);
     if (candidateFsPath.stem().string() != stem) {
       continue;
@@ -968,8 +914,7 @@ void PendingFileService::cleanupOnStartup() {
     cleanupTempDirectory(cfg.output.output_root);
     cleanupWritingFiles(cfg.output.output_root);
   } else {
-    LOG_WARN
-        << "[cleanupOnStartup] 无法获取 ConfigService，跳过清理操作";
+    LOG_WARN << "[cleanupOnStartup] 无法获取 ConfigService，跳过清理操作";
   }
 
   LOG_INFO << "[cleanupOnStartup] 启动清理操作完成";
@@ -983,8 +928,8 @@ void PendingFileService::recoverProcessingRecords() {
   }
 
   // 查询所有 processing 状态的记录
-  std::string sql =
-      "SELECT id, filepath FROM pending_files WHERE status = 'processing'";
+  std::string sql = "SELECT id, dir_path, filename FROM pending_files WHERE "
+                    "status = 'processing'";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
@@ -994,14 +939,23 @@ void PendingFileService::recoverProcessingRecords() {
 
   struct ProcessingRecord {
     int id;
-    std::string filepath;
+    std::string dir_path;
+    std::string filename;
+    std::string getFilepath() const {
+      if (dir_path.empty())
+        return filename;
+      if (dir_path.back() == '/')
+        return dir_path + filename;
+      return dir_path + "/" + filename;
+    }
   };
   std::vector<ProcessingRecord> records;
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
     ProcessingRecord rec;
     rec.id = sqlite3_column_int(stmt, 0);
-    rec.filepath = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+    rec.dir_path = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+    rec.filename = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
     records.push_back(rec);
   }
   sqlite3_finalize(stmt);
@@ -1018,13 +972,13 @@ void PendingFileService::recoverProcessingRecords() {
   int deletedCount = 0;
 
   for (const auto &rec : records) {
-    // 检查文件是否存在
+    std::string fullPath = rec.getFilepath();
     std::error_code ec;
-    bool fileExists = fs::exists(rec.filepath, ec);
+    bool fileExists = fs::exists(fullPath, ec);
 
     if (ec) {
-      LOG_WARN << "[recoverProcessingRecords] 检查文件存在性失败: "
-               << rec.filepath << ", 错误: " << ec.message();
+      LOG_WARN << "[recoverProcessingRecords] 检查文件存在性失败: " << fullPath
+               << ", 错误: " << ec.message();
       continue;
     }
 
@@ -1039,11 +993,10 @@ void PendingFileService::recoverProcessingRecords() {
           SQLITE_OK) {
         sqlite3_bind_int(updateStmt, 1, rec.id);
         if (sqlite3_step(updateStmt) == SQLITE_DONE) {
-          LOG_INFO << "[recoverProcessingRecords] 恢复为 stable: "
-                   << rec.filepath;
+          LOG_INFO << "[recoverProcessingRecords] 恢复为 stable: " << fullPath;
           recoveredCount++;
         } else {
-          LOG_ERROR << "[recoverProcessingRecords] 更新失败: " << rec.filepath;
+          LOG_ERROR << "[recoverProcessingRecords] 更新失败: " << fullPath;
         }
         sqlite3_finalize(updateStmt);
       }
@@ -1057,10 +1010,10 @@ void PendingFileService::recoverProcessingRecords() {
         sqlite3_bind_int(deleteStmt, 1, rec.id);
         if (sqlite3_step(deleteStmt) == SQLITE_DONE) {
           LOG_WARN << "[recoverProcessingRecords] 文件不存在，删除记录: "
-                   << rec.filepath;
+                   << fullPath;
           deletedCount++;
         } else {
-          LOG_ERROR << "[recoverProcessingRecords] 删除失败: " << rec.filepath;
+          LOG_ERROR << "[recoverProcessingRecords] 删除失败: " << fullPath;
         }
         sqlite3_finalize(deleteStmt);
       }
@@ -1127,7 +1080,6 @@ void PendingFileService::cleanupWritingFiles(const std::string &outputRoot) {
 
     if (entry.is_regular_file(ec)) {
       std::string filename = entry.path().filename().string();
-      // 检查文件名是否以 _writing 结尾（.mp4 或 .mp3 之前）
       if (filename.find("_writing.mp4") != std::string::npos ||
           filename.find("_writing.mp3") != std::string::npos) {
         std::error_code removeEc;
