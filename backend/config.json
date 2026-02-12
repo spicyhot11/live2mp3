@@ -8,7 +8,8 @@
         "log": {
             "logfile_base_name": "live2mp3",
             "log_path": "./logs",
-            "log_level": "DEBUG"
+            "log_level": "DEBUG",
+            "display_local_time": true
         }
     },
     "listeners": [

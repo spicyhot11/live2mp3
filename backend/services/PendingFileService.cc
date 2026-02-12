@@ -614,10 +614,10 @@ PendingFileService::getStagedFilesOlderThan(int seconds) {
   if (!db)
     return files;
 
-  std::string sql =
-      std::string("SELECT ") + SELECT_COLS +
-      " FROM pending_files WHERE status = 'staged' "
-      "AND datetime(updated_at, '+' || ? || ' seconds') <= datetime('now')";
+  std::string sql = std::string("SELECT ") + SELECT_COLS +
+                    " FROM pending_files WHERE status = 'staged' "
+                    "AND datetime(updated_at, '+' || ? || ' seconds') <= "
+                    "datetime('now', 'localtime')";
   sqlite3_stmt *stmt;
 
   if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
