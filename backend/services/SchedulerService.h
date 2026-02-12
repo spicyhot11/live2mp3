@@ -13,6 +13,8 @@
 #include <drogon/utils/coroutine.h>
 #include <mutex>
 #include <string>
+#include "utils/ThreadSafe.hpp"
+
 
 /**
  * @brief 任务调度服务类
@@ -30,6 +32,9 @@ public:
 
   void initAndStart(const Json::Value &config) override;
   void shutdown() override;
+
+  // 初始化原子配置
+  void initAtomicConfig();
 
   // 启动定期任务
   void start();
@@ -117,6 +122,37 @@ private:
 
   void setPhase(const std::string &phase);
 
+  // 原子配置变量
+  struct AtomicConfig {
+    std::atomic<int> scan_interval_seconds{60};
+    std::atomic<int> merge_window_seconds{7200};
+    std::atomic<int> stop_waiting_seconds{600};
+    std::atomic<int> stability_checks{2};
+    live2mp3::utils::ThreadSafeString output_root;
+
+    void loadFrom(const AppConfig &config) {
+      scan_interval_seconds.store(config.scheduler.scan_interval_seconds);
+      merge_window_seconds.store(config.scheduler.merge_window_seconds);
+      stop_waiting_seconds.store(config.scheduler.stop_waiting_seconds);
+      stability_checks.store(config.scheduler.stability_checks);
+      output_root.set(config.output.output_root);
+    }
+
+    std::string getOutputRoot() const {
+      return *output_root.get();
+    }
+
+    AppConfig getAtomicConfig() const {
+      AppConfig config;
+      config.scheduler.scan_interval_seconds = scan_interval_seconds.load();
+      config.scheduler.merge_window_seconds = merge_window_seconds.load();
+      config.scheduler.stop_waiting_seconds = stop_waiting_seconds.load();
+      config.scheduler.stability_checks = stability_checks.load();
+      config.output.output_root = *output_root.get();
+      return config;
+    }
+  };
+
   // 服务指针
   std::shared_ptr<ConfigService> configServicePtr_;
   std::shared_ptr<MergerService> mergerServicePtr_;
@@ -128,6 +164,7 @@ private:
   std::shared_ptr<BatchTaskService> batchTaskServicePtr_;
 
   std::atomic<bool> scanRunning_{false};
+  AtomicConfig atomicConfig_;
   std::string currentFile_;
   std::string currentPhase_;
   std::mutex mutex_;

@@ -59,6 +59,7 @@ void SchedulerService::initAndStart(const Json::Value &config) {
     return;
   }
 
+  initAtomicConfig();
   start();
   LOG_INFO << "Scheduler init and start";
 }
@@ -98,10 +99,14 @@ nlohmann::json SchedulerService::getDetailedStatus() {
   return status;
 }
 
+void SchedulerService::initAtomicConfig() {
+  auto config = configServicePtr_->getConfig();
+  atomicConfig_.loadFrom(config);
+}
+
 void SchedulerService::start() {
   drogon::app().registerBeginningAdvice([this]() {
-    auto config = configServicePtr_->getConfig();
-    int interval = config.scheduler.scan_interval_seconds;
+    int interval = atomicConfig_.scan_interval_seconds.load();
     if (interval <= 0)
       interval = 60;
 
@@ -182,7 +187,7 @@ drogon::Task<void> SchedulerService::runTaskAsync(bool immediate) {
         char speedStr[16];
         snprintf(speedStr, sizeof(speedStr), "%.2fx", task.speed);
 
-        LOG_DEBUG << "  - [" << taskTypeStr << "] " << filesStr
+        LOG_INFO << "  - [" << taskTypeStr << "] " << filesStr
                   << " | 进度: " << progressPercentStr << " ("
                   << progressTimeStr << "/" << totalTimeStr << ")"
                   << " | fps: " << task.progressFps << " | 速度: " << speedStr;
@@ -215,8 +220,7 @@ void SchedulerService::runStabilityScan() {
   auto scanResult = scannerServicePtr_->scan();
   LOG_INFO << "Found " << scanResult.files.size() << " files to check";
 
-  auto config = configServicePtr_->getConfig();
-  int requiredStableCount = config.scheduler.stability_checks;
+  int requiredStableCount = atomicConfig_.stability_checks.load();
 
   for (const auto &file : scanResult.files) {
     {
@@ -246,9 +250,8 @@ void SchedulerService::runMergeEncodeOutput(bool immediate) {
   LOG_INFO << "Phase 2: Processing stable files for merge + encode..."
            << (immediate ? " (immediate mode)" : "");
 
-  auto config = configServicePtr_->getConfig();
-  int mergeWindowSeconds = config.scheduler.merge_window_seconds;
-  int stopWaitingSeconds = config.scheduler.stop_waiting_seconds;
+  int mergeWindowSeconds = atomicConfig_.merge_window_seconds.load();
+  int stopWaitingSeconds = atomicConfig_.stop_waiting_seconds.load();
 
   // 1. 原子性地获取并标记所有稳定的原始文件为 processing
   auto stableFiles = pendingFileServicePtr_->getAndClaimStableFiles();
@@ -338,6 +341,7 @@ void SchedulerService::runMergeEncodeOutput(bool immediate) {
       std::reverse(batch.begin(), batch.end());
 
       // 非阻塞处理批次
+      auto config = atomicConfig_.getAtomicConfig();
       processBatch(batch, config);
     }
   }
@@ -424,8 +428,7 @@ void SchedulerService::onFileEncoded(int batchId, const std::string &filepath,
 }
 
 void SchedulerService::checkEncodedBatches() {
-  auto config = configServicePtr_->getConfig();
-  int stopWaitingSeconds = config.scheduler.stop_waiting_seconds;
+  int stopWaitingSeconds = atomicConfig_.stop_waiting_seconds.load();
 
   auto batchIds =
       batchTaskServicePtr_->getEncodingCompleteBatchIds(stopWaitingSeconds);
