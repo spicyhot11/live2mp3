@@ -20,8 +20,7 @@ extensions = [ '.mp4', '.ts' ]
 [scheduler]
 merge_window_hours = 2
 scan_interval_seconds = 60
-convert_retry_count = 3
-merge_retry_count = 2
+ffmpeg_retry_count = 3
 
 [ffmpeg_task]
 maxConcurrentTasks = 2

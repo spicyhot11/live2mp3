@@ -58,8 +58,7 @@ struct SchedulerConfig {
       600;                     // 结束等待时间(秒)，最后片段超过此时间则开始合并
   int stability_checks = 2;    // 稳定性检查次数(连续MD5一致次数)
   int ffmpeg_worker_count = 4; // FFmpeg 并发 Worker 数量
-  int convert_retry_count = 3; // 单文件转换重试次数
-  int merge_retry_count = 2;   // 合并重试次数
+  int ffmpeg_retry_count = 3;  // FFmpeg 任务重试次数（适用于所有FFmpeg任务）
 };
 
 /**

@@ -151,9 +151,10 @@ void FfmpegTaskProcDetail::run() {
       try {
         promise_.set_value(getProcessResult());
       } catch (const std::future_error &e) {
-        LOG_WARN << "FfmpegTaskProcDetail: promise already set (cancelled during "
-                    "execution): "
-                 << e.what();
+        LOG_WARN
+            << "FfmpegTaskProcDetail: promise already set (cancelled during "
+               "execution): "
+            << e.what();
       }
       return;
     }
@@ -470,7 +471,7 @@ void FfmpegTaskService::initAndStart(const Json::Value &config) {
   if (configService_) {
     auto appConfig = configService_->getConfig();
     maxConcurrent = appConfig.ffmpeg_task.maxConcurrentTasks;
-    maxRetries = appConfig.scheduler.convert_retry_count;
+    maxRetries = appConfig.scheduler.ffmpeg_retry_count;
   } else {
     LOG_ERROR << "FfmpegTaskService: ConfigService not found, using defaults";
   }
