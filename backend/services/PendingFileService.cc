@@ -73,8 +73,8 @@ static const char *SELECT_COLS =
 
 void PendingFileService::initAndStart(const Json::Value &config) {
   LOG_INFO << "PendingFileService initialized";
-  // 启动时清理操作
-  cleanupOnStartup();
+  // 启动时清理操作  移交给scheduler处理
+  // cleanupOnStartup();
 }
 
 void PendingFileService::shutdown() {}
@@ -983,23 +983,28 @@ void PendingFileService::recoverProcessingRecords() {
     }
 
     if (fileExists) {
-      // 文件存在，恢复为 stable 状态
-      std::string updateSql =
-          "UPDATE pending_files SET status = 'stable', "
-          "updated_at = datetime('now', 'localtime') WHERE id = ?";
-      sqlite3_stmt *updateStmt;
+      /*
+        考虑不恢复stable，因为processing后状态由batchtask接管，在另一个数据表中维护
+        如果恢复stable，batchtask会重新处理，导致重复处理
+      */
 
-      if (sqlite3_prepare_v2(db, updateSql.c_str(), -1, &updateStmt, 0) ==
-          SQLITE_OK) {
-        sqlite3_bind_int(updateStmt, 1, rec.id);
-        if (sqlite3_step(updateStmt) == SQLITE_DONE) {
-          LOG_INFO << "[recoverProcessingRecords] 恢复为 stable: " << fullPath;
-          recoveredCount++;
-        } else {
-          LOG_ERROR << "[recoverProcessingRecords] 更新失败: " << fullPath;
-        }
-        sqlite3_finalize(updateStmt);
-      }
+      // // 文件存在，恢复为 stable 状态
+      // std::string updateSql =
+      //     "UPDATE pending_files SET status = 'stable', "
+      //     "updated_at = datetime('now', 'localtime') WHERE id = ?";
+      // sqlite3_stmt *updateStmt;
+
+      // if (sqlite3_prepare_v2(db, updateSql.c_str(), -1, &updateStmt, 0) ==
+      //     SQLITE_OK) {
+      //   sqlite3_bind_int(updateStmt, 1, rec.id);
+      //   if (sqlite3_step(updateStmt) == SQLITE_DONE) {
+      //     LOG_INFO << "[recoverProcessingRecords] 恢复为 stable: " << fullPath;
+      //     recoveredCount++;
+      //   } else {
+      //     LOG_ERROR << "[recoverProcessingRecords] 更新失败: " << fullPath;
+      //   }
+      //   sqlite3_finalize(updateStmt);
+      // }
     } else {
       // 文件不存在，删除记录
       std::string deleteSql = "DELETE FROM pending_files WHERE id = ?";

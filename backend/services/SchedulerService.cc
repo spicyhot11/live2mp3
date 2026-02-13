@@ -4,8 +4,6 @@
 #include <algorithm>
 #include <drogon/drogon.h>
 #include <filesystem>
-#include <map>
-#include <set>
 
 namespace fs = std::filesystem;
 
@@ -60,6 +58,12 @@ void SchedulerService::initAndStart(const Json::Value &config) {
   }
 
   initAtomicConfig();
+  // 清理临时目录
+  pendingFileServicePtr_->cleanupTempDirectory(atomicConfig_.getOutputRoot());
+
+  // 启动时恢复被中断的任务
+  batchTaskServicePtr_->recoverInterruptedTasks();
+
   start();
   LOG_INFO << "Scheduler init and start";
 }
@@ -188,9 +192,9 @@ drogon::Task<void> SchedulerService::runTaskAsync(bool immediate) {
         snprintf(speedStr, sizeof(speedStr), "%.2fx", task.speed);
 
         LOG_INFO << "  - [" << taskTypeStr << "] " << filesStr
-                  << " | 进度: " << progressPercentStr << " ("
-                  << progressTimeStr << "/" << totalTimeStr << ")"
-                  << " | fps: " << task.progressFps << " | 速度: " << speedStr;
+                 << " | 进度: " << progressPercentStr << " (" << progressTimeStr
+                 << "/" << totalTimeStr << ")"
+                 << " | fps: " << task.progressFps << " | 速度: " << speedStr;
       }
     }
   } else {
@@ -262,8 +266,8 @@ void SchedulerService::runMergeEncodeOutput(bool immediate) {
   LOG_INFO << "Claimed " << stableFiles.size()
            << " stable files for processing";
 
-  // 2. 按主播名分组
-  std::map<std::string, std::vector<StableFile>> groupedByStreamer;
+  // 2. 构建 StableFile 列表（验证文件存在并解析 streamer/time）
+  std::vector<StableFile> validFiles;
   for (const auto &pf : stableFiles) {
     std::string filepath = pf.getFilepath();
     if (!fs::exists(filepath)) {
@@ -282,131 +286,125 @@ void SchedulerService::runMergeEncodeOutput(bool immediate) {
       continue;
     }
 
-    groupedByStreamer[streamer].push_back({pf, *time});
+    validFiles.push_back({pf, *time});
   }
 
-  // 3. 处理每个主播分组
-  for (auto &[streamer, files] : groupedByStreamer) {
-    // 按时间降序排列
-    std::sort(files.begin(), files.end(),
-              [](const StableFile &a, const StableFile &b) {
-                return a.time > b.time;
-              });
+  if (validFiles.empty()) {
+    LOG_DEBUG << "No valid stable files after filtering";
+    return;
+  }
 
-    // 分配批次
-    std::set<size_t> assigned;
-    std::vector<std::vector<StableFile>> batches;
+  // 3. 调用 BatchTaskService 进行分组 + 与已有批次合并
+  auto assignments = batchTaskServicePtr_->groupAndAssignBatches(
+      validFiles, mergeWindowSeconds);
 
-    for (size_t i = 0; i < files.size(); ++i) {
-      if (assigned.count(i))
+  // 4. 处理分配结果
+  auto now = std::chrono::system_clock::now();
+  auto config = atomicConfig_.getAtomicConfig();
+
+  // Phase A: 创建/合并批次
+  std::vector<int> batchIdsToProcess;
+
+  for (auto &assign : assignments) {
+    int batchId = assign.batchId;
+
+    // 构建 BatchInputFile 列表（两种情况共用）
+    std::vector<BatchInputFile> batchInputFiles;
+    for (const auto &f : assign.files) {
+      BatchInputFile bif;
+      bif.filepath = f.pf.getFilepath();
+      bif.fingerprint = f.pf.fingerprint;
+      bif.pending_file_id = f.pf.id;
+      batchInputFiles.push_back(bif);
+    }
+
+    if (batchId < 0) {
+      // 新建批次
+      fs::path outputDir =
+          fs::path(config.output.output_root) / assign.streamer;
+      fs::path tmpDir = fs::path(config.output.output_root) / "tmp";
+      try {
+        fs::create_directories(outputDir);
+        fs::create_directories(tmpDir);
+      } catch (...) {
+      }
+
+      batchId =
+          batchTaskServicePtr_->createBatch(assign.streamer, outputDir.string(),
+                                            tmpDir.string(), batchInputFiles);
+
+      if (batchId < 0) {
+        LOG_ERROR << "创建批次记录失败，放弃已有文件";
+        for (const auto &f : assign.files) {
+          pendingFileServicePtr_->markAsDeprecated(f.pf.getFilepath());
+        }
         continue;
+      }
 
-      std::vector<StableFile> batch;
-      batch.push_back(files[i]);
-      assigned.insert(i);
+      LOG_INFO << "Created batch id=" << batchId
+               << " streamer=" << assign.streamer
+               << " files=" << assign.files.size();
+    } else {
+      // 合并到已有批次
+      if (!batchTaskServicePtr_->addFilesToBatch(batchId, batchInputFiles)) {
+        LOG_ERROR << "Failed to add files to existing batch id=" << batchId;
+        for (const auto &f : assign.files) {
+          pendingFileServicePtr_->markAsDeprecated(f.pf.getFilepath());
+        }
+        continue;
+      }
 
-      for (size_t j = i + 1; j < files.size(); ++j) {
-        if (assigned.count(j))
+      LOG_INFO << "Added " << assign.files.size()
+               << " files to existing batch id=" << batchId << " for streamer '"
+               << assign.streamer << "'";
+    }
+
+    batchIdsToProcess.push_back(batchId);
+  }
+
+  // Phase B: 统一处理每个批次
+  for (int batchId : batchIdsToProcess) {
+    auto batchOpt = batchTaskServicePtr_->getBatch(batchId);
+    if (!batchOpt)
+      continue;
+
+    auto batchFiles = batchTaskServicePtr_->getBatchFiles(batchId);
+
+    // 检查批次是否已有文件在处理中
+    bool hasActiveFiles = std::any_of(
+        batchFiles.begin(), batchFiles.end(), [](const BatchFile &bf) {
+          return bf.status == "encoding" || bf.status == "encoded";
+        });
+
+    if (!hasActiveFiles) {
+      // 批次未在处理：判断时间是否就绪
+      auto fileTimes = batchTaskServicePtr_->getBatchFileTimes(batchId);
+      if (!fileTimes.empty()) {
+        auto latestTime = *std::max_element(fileTimes.begin(), fileTimes.end());
+        auto age =
+            std::chrono::duration_cast<std::chrono::seconds>(now - latestTime)
+                .count();
+        if (!immediate && age <= stopWaitingSeconds) {
+          LOG_DEBUG << "Batch id=" << batchId << " for streamer '"
+                    << batchOpt->streamer << "' not ready yet (age=" << age
+                    << "s, threshold=" << stopWaitingSeconds << "s)";
           continue;
-        auto gap = std::chrono::duration_cast<std::chrono::seconds>(
-                       batch.back().time - files[j].time)
-                       .count();
-        if (gap <= mergeWindowSeconds) {
-          batch.push_back(files[j]);
-          assigned.insert(j);
-        } else {
-          break;
         }
       }
-
-      batches.push_back(std::move(batch));
     }
 
-    // 4. 判断并处理每个批次
-    auto now = std::chrono::system_clock::now();
-    for (auto &batch : batches) {
-      // 使用批次中最新录播的结束时间判断
-      auto age =
-          std::chrono::duration_cast<std::chrono::seconds>(now - batch[0].time)
-              .count();
-
-      if (!immediate && age <= stopWaitingSeconds) {
-        LOG_DEBUG << "Batch for streamer '" << streamer
-                  << "' not ready yet (age=" << age
-                  << "s, threshold=" << stopWaitingSeconds << "s)";
-        continue;
+    // 提交所有 pending 文件的转码任务
+    for (const auto &bf : batchFiles) {
+      if (bf.status == "pending") {
+        std::string filepath = bf.getFilepath();
+        batchTaskServicePtr_->markFileEncoding(batchId, filepath);
+        ffmpegTaskServicePtr_->submitTask(
+            FfmpegTaskType::CONVERT_MP4, {filepath}, {batchOpt->tmp_dir},
+            [this, batchId, filepath](FfmpegTaskResult result) {
+              onFileEncoded(batchId, filepath, result);
+            });
       }
-
-      // 按时间升序排列（合并时需要按时间顺序）
-      std::reverse(batch.begin(), batch.end());
-
-      // 非阻塞处理批次
-      auto config = atomicConfig_.getAtomicConfig();
-      processBatch(batch, config);
     }
-  }
-}
-
-void SchedulerService::processBatch(const std::vector<StableFile> &batch,
-                                    const AppConfig &config) {
-  if (batch.empty())
-    return;
-
-  LOG_INFO << "Processing batch of " << batch.size() << " files";
-
-  // 使用批次中最新的文件名作为输出文件名基础
-  std::string latestFilepath = batch.back().pf.getFilepath();
-  fs::path latestFilePath(latestFilepath);
-  std::string streamer =
-      MergerService::parseTitle(latestFilePath.filename().string());
-  fs::path outputDir = fs::path(config.output.output_root) / streamer;
-  fs::path tmpDir = fs::path(config.output.output_root) / "tmp";
-
-  try {
-    fs::create_directories(outputDir);
-    fs::create_directories(tmpDir);
-  } catch (...) {
-  }
-
-  // 构建 BatchInputFile 列表
-  std::vector<BatchInputFile> batchInputFiles;
-  for (const auto &f : batch) {
-    BatchInputFile bif;
-    bif.filepath = f.pf.getFilepath();
-    bif.fingerprint = f.pf.fingerprint;
-    bif.pending_file_id = f.pf.id;
-    batchInputFiles.push_back(bif);
-  }
-
-  // 创建数据库批次记录
-  int batchId = batchTaskServicePtr_->createBatch(
-      streamer, outputDir.string(), tmpDir.string(), batchInputFiles);
-
-  if (batchId < 0) {
-    LOG_ERROR << "创建批次记录失败，回滚文件状态";
-    std::vector<std::string> flvPaths;
-    for (const auto &f : batch) {
-      flvPaths.push_back(f.pf.getFilepath());
-    }
-    pendingFileServicePtr_->rollbackToStable(flvPaths);
-    return;
-  }
-
-  LOG_INFO << "Created batch id=" << batchId << " streamer=" << streamer
-           << " files=" << batch.size();
-
-  // 为每个文件提交转码任务（非阻塞）
-  for (const auto &f : batch) {
-    std::string filepath = f.pf.getFilepath();
-
-    batchTaskServicePtr_->markFileEncoding(batchId, filepath);
-
-    // 使用 onComplete 回调 - 转码完成时自动触发下一阶段
-    ffmpegTaskServicePtr_->submitTask(
-        FfmpegTaskType::CONVERT_MP4, {filepath}, {tmpDir.string()},
-        [this, batchId, filepath](FfmpegTaskResult result) {
-          onFileEncoded(batchId, filepath, result);
-        });
   }
 }
 

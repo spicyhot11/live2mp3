@@ -8,13 +8,12 @@
 #include "MergerService.h"
 #include "PendingFileService.h"
 #include "ScannerService.h"
+#include "utils/ThreadSafe.hpp"
 #include <atomic>
 #include <drogon/plugins/Plugin.h>
 #include <drogon/utils/coroutine.h>
 #include <mutex>
 #include <string>
-#include "utils/ThreadSafe.hpp"
-
 
 /**
  * @brief 任务调度服务类
@@ -69,18 +68,6 @@ private:
    * @brief 阶段 3: 轮询数据库，找到编码完成的批次，触发合并
    */
   void checkEncodedBatches();
-
-  // 分组辅助结构
-  struct StableFile {
-    PendingFile pf;
-    std::chrono::system_clock::time_point time;
-  };
-
-  /**
-   * @brief 处理一批文件：创建数据库批次记录并提交转码任务
-   */
-  void processBatch(const std::vector<StableFile> &batch,
-                    const AppConfig &config);
 
   /**
    * @brief 单文件转码完成回调
@@ -138,9 +125,7 @@ private:
       output_root.set(config.output.output_root);
     }
 
-    std::string getOutputRoot() const {
-      return *output_root.get();
-    }
+    std::string getOutputRoot() const { return *output_root.get(); }
 
     AppConfig getAtomicConfig() const {
       AppConfig config;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PendingFileService.h"
+#include <chrono>
 #include <drogon/drogon.h>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -54,6 +56,23 @@ struct BatchInputFile {
 };
 
 /**
+ * @brief 稳定文件（带解析后的时间）
+ */
+struct StableFile {
+  PendingFile pf;
+  std::chrono::system_clock::time_point time;
+};
+
+/**
+ * @brief 批次分配结果
+ */
+struct BatchAssignment {
+  int batchId; // -1 表示需要新建
+  std::string streamer;
+  std::vector<StableFile> files;
+};
+
+/**
  * @brief 批次任务管理服务
  *
  * 管理 task_batches 和 task_batch_files 表的CRUD操作。
@@ -69,6 +88,14 @@ public:
   void initAndStart(const Json::Value &config) override;
   void shutdown() override;
 
+public:
+  /**
+   * @brief 启动时恢复被中断的任务
+   *
+   * 将 encoding 状态的文件回滚到 pending，
+   * 将 merging/extracting_mp3 状态的批次回滚到 encoding。
+   */
+  void recoverInterruptedTasks();
   /**
    * @brief 创建一个新批次及关联文件
    * @return batchId, -1 表示失败
@@ -135,4 +162,35 @@ public:
    * @brief 获取所有未完成的批次（启动恢复用）
    */
   std::vector<BatchInfo> getIncompleteBatches();
+
+  /**
+   * @brief 获取指定主播的所有 encoding 状态批次
+   */
+  std::vector<BatchInfo>
+  getEncodingBatchesByStreamer(const std::string &streamer);
+
+  /**
+   * @brief 获取批次中所有文件的时间点列表（从 filename 解析）
+   */
+  std::vector<std::chrono::system_clock::time_point>
+  getBatchFileTimes(int batchId);
+
+  /**
+   * @brief 向已有批次追加文件
+   */
+  bool addFilesToBatch(int batchId, const std::vector<BatchInputFile> &files);
+
+  /**
+   * @brief 分组+合并主入口
+   *
+   * 对新 stable 文件按主播分组、按时间窗口分批，
+   * 然后与已有 encoding 批次合并（可拆分）。
+   *
+   * @param stableFiles 新的稳定文件列表
+   * @param mergeWindowSeconds 合并时间窗口（秒）
+   * @return 批次分配结果列表
+   */
+  std::vector<BatchAssignment>
+  groupAndAssignBatches(const std::vector<StableFile> &stableFiles,
+                        int mergeWindowSeconds);
 };
