@@ -67,7 +67,8 @@
             "config": {},
             "dependencies": [
                 "ConfigService",
-                "DatabaseService"
+                "DatabaseService",
+                "PendingFileService"
             ]
         },
         {
