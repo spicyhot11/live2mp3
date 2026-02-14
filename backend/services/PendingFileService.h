@@ -45,15 +45,6 @@ public:
   void shutdown() override;
 
   /**
-   * @brief 清理临时目录
-   *
-   * 清理输出目录下的 tmp 目录中的所有文件
-   *
-   * @param outputRoot 输出根目录路径
-   */
-  void cleanupTempDirectory(const std::string &outputRoot);
-
-  /**
    * @brief 添加或更新文件信息
    *
    * 如果文件已存在，更新其MD5和时间戳；如果不存在则创建新记录。
@@ -264,13 +255,22 @@ public:
    */
   void resolveDuplicateExtensions(const std::string &filepath);
 
-private:
   /**
    * @brief 启动时清理操作
    *
    * 恢复 processing 状态的记录，清理临时文件和 _writing 文件
    */
   void cleanupOnStartup();
+
+private:
+  /**
+   * @brief 清理临时目录
+   *
+   * 清理输出目录下的 tmp 目录中的所有文件
+   *
+   * @param outputRoot 输出根目录路径
+   */
+  void cleanupTempDirectory(const std::string &outputRoot);
 
   /**
    * @brief 恢复 processing 状态的记录

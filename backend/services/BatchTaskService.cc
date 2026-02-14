@@ -332,14 +332,19 @@ bool BatchTaskService::markFileFailed(int batchId,
   std::string dirPath, fname;
   splitPath(filepath, dirPath, fname);
 
+  // 1. 标记 PendingFile 为弃用
+  auto pendingFileService = drogon::app().getSharedPlugin<PendingFileService>();
+  if (pendingFileService) {
+    pendingFileService->markAsDeprecated(filepath);
+  }
+
   if (sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION", nullptr, nullptr,
                    nullptr) != SQLITE_OK) {
     return false;
   }
 
-  // 更新文件状态
-  std::string fileSql = "UPDATE task_batch_files SET status = 'failed', "
-                        "updated_at = datetime('now', 'localtime') "
+  // 2. 删除批次文件记录（不再保留在子表中）
+  std::string fileSql = "DELETE FROM task_batch_files "
                         "WHERE batch_id = ? AND dir_path = ? AND filename = ?";
   sqlite3_stmt *fileStmt;
 
@@ -359,7 +364,7 @@ bool BatchTaskService::markFileFailed(int batchId,
   }
   sqlite3_finalize(fileStmt);
 
-  // 递增批次 failed_count
+  // 3. 递增批次 failed_count
   std::string batchSql =
       "UPDATE task_batches SET failed_count = failed_count + 1, "
       "updated_at = datetime('now', 'localtime') WHERE id = ?";

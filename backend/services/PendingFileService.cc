@@ -983,28 +983,45 @@ void PendingFileService::recoverProcessingRecords() {
     }
 
     if (fileExists) {
-      /*
-        考虑不恢复stable，因为processing后状态由batchtask接管，在另一个数据表中维护
-        如果恢复stable，batchtask会重新处理，导致重复处理
-      */
+      // 检查该 ID 是否已经在 task_batch_files 中
+      std::string checkSql =
+          "SELECT 1 FROM task_batch_files WHERE pending_file_id = ?";
+      sqlite3_stmt *checkStmt;
+      bool inBatch = false;
+      if (sqlite3_prepare_v2(db, checkSql.c_str(), -1, &checkStmt, 0) ==
+          SQLITE_OK) {
+        sqlite3_bind_int(checkStmt, 1, rec.id);
+        if (sqlite3_step(checkStmt) == SQLITE_ROW) {
+          inBatch = true;
+        }
+        sqlite3_finalize(checkStmt);
+      }
 
-      // // 文件存在，恢复为 stable 状态
-      // std::string updateSql =
-      //     "UPDATE pending_files SET status = 'stable', "
-      //     "updated_at = datetime('now', 'localtime') WHERE id = ?";
-      // sqlite3_stmt *updateStmt;
+      if (!inBatch) {
+        // 文件存在且不在任何批次中，属于僵尸记录，恢复为 stable 状态
+        std::string updateSql =
+            "UPDATE pending_files SET status = 'stable', "
+            "updated_at = datetime('now', 'localtime') WHERE id = ?";
+        sqlite3_stmt *updateStmt;
 
-      // if (sqlite3_prepare_v2(db, updateSql.c_str(), -1, &updateStmt, 0) ==
-      //     SQLITE_OK) {
-      //   sqlite3_bind_int(updateStmt, 1, rec.id);
-      //   if (sqlite3_step(updateStmt) == SQLITE_DONE) {
-      //     LOG_INFO << "[recoverProcessingRecords] 恢复为 stable: " << fullPath;
-      //     recoveredCount++;
-      //   } else {
-      //     LOG_ERROR << "[recoverProcessingRecords] 更新失败: " << fullPath;
-      //   }
-      //   sqlite3_finalize(updateStmt);
-      // }
+        if (sqlite3_prepare_v2(db, updateSql.c_str(), -1, &updateStmt, 0) ==
+            SQLITE_OK) {
+          sqlite3_bind_int(updateStmt, 1, rec.id);
+          if (sqlite3_step(updateStmt) == SQLITE_DONE) {
+            LOG_INFO
+                << "[recoverProcessingRecords] 发现僵尸记录，恢复为 stable: "
+                << fullPath;
+            recoveredCount++;
+          } else {
+            LOG_ERROR << "[recoverProcessingRecords] 更新失败: " << fullPath;
+          }
+          sqlite3_finalize(updateStmt);
+        }
+      } else {
+        LOG_DEBUG << "[recoverProcessingRecords] 文件已在批次中，保持 "
+                     "processing 状态: "
+                  << fullPath;
+      }
     } else {
       // 文件不存在，删除记录
       std::string deleteSql = "DELETE FROM pending_files WHERE id = ?";
@@ -1048,14 +1065,17 @@ void PendingFileService::cleanupTempDirectory(const std::string &outputRoot) {
     }
 
     if (entry.is_regular_file(ec)) {
-      std::error_code removeEc;
-      fs::remove(entry.path(), removeEc);
-      if (!removeEc) {
-        LOG_DEBUG << "[cleanupTempDirectory] 删除: " << entry.path().string();
-        deletedCount++;
-      } else {
-        LOG_WARN << "[cleanupTempDirectory] 删除失败: " << entry.path().string()
-                 << ", 错误: " << removeEc.message();
+      std::string filename = entry.path().filename().string();
+      if (filename.find("_writing") != std::string::npos) {
+        std::error_code removeEc;
+        fs::remove(entry.path(), removeEc);
+        if (!removeEc) {
+          LOG_DEBUG << "[cleanupTempDirectory] 删除: " << entry.path().string();
+          deletedCount++;
+        } else {
+          LOG_WARN << "[cleanupTempDirectory] 删除失败: "
+                   << entry.path().string() << ", 错误: " << removeEc.message();
+        }
       }
     }
   }

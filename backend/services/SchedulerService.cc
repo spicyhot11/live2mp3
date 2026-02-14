@@ -59,7 +59,7 @@ void SchedulerService::initAndStart(const Json::Value &config) {
 
   initAtomicConfig();
   // 清理临时目录
-  pendingFileServicePtr_->cleanupTempDirectory(atomicConfig_.getOutputRoot());
+  pendingFileServicePtr_->cleanupOnStartup();
 
   // 启动时恢复被中断的任务
   batchTaskServicePtr_->recoverInterruptedTasks();
