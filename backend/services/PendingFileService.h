@@ -1,30 +1,12 @@
 #pragma once
 
+#include "../repos/BatchTaskRepo.h"
+#include "../repos/PendingFileRepo.h"
+#include "models/PendingFile.h"
 #include <drogon/plugins/Plugin.h>
-#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <vector>
-
-// 状态值: "pending"(待处理), "stable"(稳定), "processing"(处理中),
-// "staged"(已暂存), "completed"(已完成), "deprecated"(已废弃-同名文件中较小者)
-struct PendingFile {
-  int id;
-  std::string dir_path;
-  std::string filename;
-  std::string fingerprint;
-  int stable_count;
-  std::string status;
-  std::string temp_mp4_path;
-  std::string temp_mp3_path;
-  std::string start_time;
-  std::string end_time;
-
-  /// 获取完整文件路径
-  std::string getFilepath() const;
-};
-
-void to_json(nlohmann::json &j, const PendingFile &p);
 
 /**
  * @brief 待处理文件服务类
@@ -263,6 +245,9 @@ public:
   void cleanupOnStartup();
 
 private:
+  PendingFileRepo repo_;
+  BatchTaskRepo batchRepo_;
+
   /**
    * @brief 清理临时目录
    *

@@ -39,6 +39,86 @@ bool DatabaseService::executeQuery(const std::string &query) {
   return true;
 }
 
+int DatabaseService::queryScalar(const std::string &sql,
+                                 std::function<void(sqlite3_stmt *)> binder,
+                                 int defaultValue) {
+  if (!db_)
+    return defaultValue;
+
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
+    LOG_ERROR << "[queryScalar] Failed to prepare: " << sqlite3_errmsg(db_);
+    return defaultValue;
+  }
+
+  if (binder) {
+    binder(stmt);
+  }
+
+  int result = defaultValue;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    result = sqlite3_column_int(stmt, 0);
+  }
+
+  sqlite3_finalize(stmt);
+  return result;
+}
+
+bool DatabaseService::executeUpdate(
+    const std::string &sql, std::function<void(sqlite3_stmt *)> binder) {
+  if (!db_)
+    return false;
+
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
+    LOG_ERROR << "[executeUpdate] Failed to prepare: " << sqlite3_errmsg(db_);
+    return false;
+  }
+
+  if (binder) {
+    binder(stmt);
+  }
+
+  bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+  if (!success) {
+    LOG_ERROR << "[executeUpdate] Failed: " << sqlite3_errmsg(db_);
+  }
+  sqlite3_finalize(stmt);
+  return success;
+}
+
+int DatabaseService::executeUpdateCount(
+    const std::string &sql, std::function<void(sqlite3_stmt *)> binder) {
+  if (!db_)
+    return -1;
+
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, 0) != SQLITE_OK) {
+    LOG_ERROR << "[executeUpdateCount] Failed to prepare: "
+              << sqlite3_errmsg(db_);
+    return -1;
+  }
+
+  if (binder) {
+    binder(stmt);
+  }
+
+  if (sqlite3_step(stmt) != SQLITE_DONE) {
+    LOG_ERROR << "[executeUpdateCount] Failed: " << sqlite3_errmsg(db_);
+    sqlite3_finalize(stmt);
+    return -1;
+  }
+
+  int changes = sqlite3_changes(db_);
+  sqlite3_finalize(stmt);
+  return changes;
+}
+
+int DatabaseService::lastInsertId() {
+  if (!db_)
+    return -1;
+  return static_cast<int>(sqlite3_last_insert_rowid(db_));
+}
 void DatabaseService::initSchema() {
   // Pending files table for stability tracking
   // filepath 拆分为 dir_path + filename

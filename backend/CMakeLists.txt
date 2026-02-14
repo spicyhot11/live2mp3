@@ -28,9 +28,11 @@ file(GLOB SRC_FILES_ROOT "*.cc" "*.cpp")
 file(GLOB_RECURSE SRC_FILES_CONTROLLERS "controllers/*.cc" "controllers/*.cpp")
 file(GLOB_RECURSE SRC_FILES_SERVICES "services/*.cc" "services/*.cpp")
 file(GLOB_RECURSE SRC_FILES_UTILS "utils/*.cc" "utils/*.cpp")
+file(GLOB_RECURSE SRC_FILES_REPOS "repos/*.cc" "repos/*.cpp")
+file(GLOB_RECURSE SRC_FILES_MODELS "models/*.cc" "models/*.cpp")
 
 # 合并源文件列表
-set(SRC_FILES ${SRC_FILES_ROOT} ${SRC_FILES_CONTROLLERS} ${SRC_FILES_SERVICES} ${SRC_FILES_UTILS})
+set(SRC_FILES ${SRC_FILES_ROOT} ${SRC_FILES_CONTROLLERS} ${SRC_FILES_SERVICES} ${SRC_FILES_UTILS} ${SRC_FILES_REPOS} ${SRC_FILES_MODELS})
 
 add_executable(live2mp3 ${SRC_FILES})
 
