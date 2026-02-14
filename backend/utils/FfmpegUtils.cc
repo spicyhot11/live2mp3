@@ -175,6 +175,13 @@ bool runFfmpegWithProgress(const std::string &cmd,
     // 这样 kill(-pid, ...) 可以杀死整个进程树
     setpgid(0, 0);
 
+    // 重定向 stdin 到 /dev/null，防止 FFmpeg 在后台尝试读取而挂起（SIGTTIN）
+    int devNull = open("/dev/null", O_RDONLY);
+    if (devNull != -1) {
+      dup2(devNull, STDIN_FILENO);
+      close(devNull);
+    }
+
     // 重定向 stdout 和 stderr 到管道写端
     dup2(pipefd[1], STDOUT_FILENO);
     dup2(pipefd[1], STDERR_FILENO);
