@@ -135,6 +135,16 @@ public:
   groupAndAssignBatches(const std::vector<StableFile> &stableFiles,
                         int mergeWindowSeconds);
 
+  /**
+   * @brief 扫描所有不完整批次并重新提交处理任务
+   */
+  void reSubmitInterruptedTasks();
+
+  /**
+   * @brief 重新提交指定批次的转码任务
+   */
+  void processBatch(int batchId);
+
 private:
   BatchTaskRepo repo_;
 };

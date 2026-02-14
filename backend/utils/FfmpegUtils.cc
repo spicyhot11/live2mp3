@@ -195,7 +195,7 @@ bool runFfmpegWithProgress(const std::string &cmd,
     *outPid = pid;
   }
 
-  LOG_DEBUG << "FFmpeg 进程已启动，PID: " << pid;
+  LOG_INFO << "FFmpeg 进程已启动，PID: " << pid;
 
   // 立即通知 PID
   if (onPidAvailable) {

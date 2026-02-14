@@ -64,6 +64,8 @@ void SchedulerService::initAndStart(const Json::Value &config) {
   // 启动时恢复被中断的任务
   batchTaskServicePtr_->recoverInterruptedTasks();
 
+  
+
   start();
   LOG_INFO << "Scheduler init and start";
 }

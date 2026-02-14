@@ -1,5 +1,7 @@
 #include "BatchTaskService.h"
+#include "FfmpegTaskService.h"
 #include "MergerService.h"
+#include "SchedulerService.h"
 #include <cmath>
 #include <filesystem>
 #include <map>
@@ -66,6 +68,9 @@ void BatchTaskService::recoverInterruptedTasks() {
   } else {
     LOG_INFO << "[recoverInterruptedTasks] No batches need rollback";
   }
+
+  // 3. 重新提交处理任务
+  reSubmitInterruptedTasks();
 
   LOG_INFO << "[recoverInterruptedTasks] Recovery check completed";
 }
@@ -311,4 +316,49 @@ std::vector<BatchAssignment> BatchTaskService::groupAndAssignBatches(
   }
 
   return result;
+}
+
+void BatchTaskService::reSubmitInterruptedTasks() {
+  auto incompleteBatches = getIncompleteBatches();
+  if (incompleteBatches.empty()) {
+    LOG_INFO << "[reSubmitInterruptedTasks] No incomplete batches to process";
+    return;
+  }
+
+  LOG_INFO << "[reSubmitInterruptedTasks] Found " << incompleteBatches.size()
+           << " incomplete batches to check";
+  for (const auto &batch : incompleteBatches) {
+    processBatch(batch.id);
+  }
+}
+
+void BatchTaskService::processBatch(int batchId) {
+  auto batchOpt = getBatch(batchId);
+  if (!batchOpt)
+    return;
+
+  auto batchFiles = getBatchFiles(batchId);
+  auto ffmpegTaskService = drogon::app().getSharedPlugin<FfmpegTaskService>();
+  auto schedulerService = drogon::app().getSharedPlugin<SchedulerService>();
+
+  if (!ffmpegTaskService || !schedulerService) {
+    LOG_ERROR << "[processBatch] FfmpegTaskService or SchedulerService not "
+                 "available";
+    return;
+  }
+
+  for (const auto &bf : batchFiles) {
+    if (bf.status == "pending") {
+      std::string filepath = bf.getFilepath();
+      LOG_INFO << "[processBatch] Re-submitting task for batch " << batchId
+               << ": " << filepath;
+
+      markFileEncoding(batchId, filepath);
+      ffmpegTaskService->submitTask(
+          FfmpegTaskType::CONVERT_MP4, {filepath}, {batchOpt->tmp_dir},
+          [schedulerService, batchId, filepath](FfmpegTaskResult result) {
+            schedulerService->onFileEncoded(batchId, filepath, result);
+          });
+    }
+  }
 }

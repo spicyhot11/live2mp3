@@ -47,6 +47,27 @@ public:
 
   nlohmann::json getDetailedStatus();
 
+  /**
+   * @brief 单文件转码完成回调
+   */
+  void onFileEncoded(int batchId, const std::string &filepath,
+                     const FfmpegTaskResult &result);
+
+  /**
+   * @brief 批次内所有文件转码完成
+   */
+  void onBatchEncodingComplete(int batchId);
+
+  /**
+   * @brief 合并完成回调
+   */
+  void onMergeComplete(int batchId, const FfmpegTaskResult &result);
+
+  /**
+   * @brief MP3 提取完成回调
+   */
+  void onMp3Complete(int batchId, const FfmpegTaskResult &result);
+
 private:
   /**
    * @brief 主任务协程
@@ -68,27 +89,6 @@ private:
    * @brief 阶段 3: 轮询数据库，找到编码完成的批次，触发合并
    */
   void checkEncodedBatches();
-
-  /**
-   * @brief 单文件转码完成回调
-   */
-  void onFileEncoded(int batchId, const std::string &filepath,
-                     const FfmpegTaskResult &result);
-
-  /**
-   * @brief 批次内所有文件转码完成
-   */
-  void onBatchEncodingComplete(int batchId);
-
-  /**
-   * @brief 合并完成回调
-   */
-  void onMergeComplete(int batchId, const FfmpegTaskResult &result);
-
-  /**
-   * @brief MP3 提取完成回调
-   */
-  void onMp3Complete(int batchId, const FfmpegTaskResult &result);
 
   /**
    * @brief 将文件移动到输出目录（降级处理）
