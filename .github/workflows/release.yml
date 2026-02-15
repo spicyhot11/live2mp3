@@ -18,17 +18,21 @@ jobs:
           - os: macos
             arch: arm64
             runner: macos-latest
-          - os: ubuntu
+            is_native_arm: true
+          - os: linux
             arch: x86_64
             runner: ubuntu-latest
-          - os: ubuntu
+            is_native_arm: true
+          - os: linux
             arch: arm64
-            runner: ubuntu-24.04-arm64
+            runner: ubuntu-latest
+            is_native_arm: false # We use cross-compilation on Linux for ARM64
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Setup Python and Conan (Common for all platforms)
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -39,44 +43,102 @@ jobs:
           pip install conan
           conan profile detect --force
 
-      - name: Install System Dependencies (Linux)
-        if: runner.os == 'Linux'
+      - name: Install System Dependencies (Linux x86_64 Native)
+        if: runner.os == 'Linux' && matrix.arch == 'x86_64'
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ffmpeg pkg-config libsqlite3-dev libssl-dev
 
-      - name: Install System Dependencies (macOS)
+      - name: Install System Dependencies (Linux ARM64 Cross-compile)
+        if: runner.os == 'Linux' && matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ffmpeg pkg-config g++-aarch64-linux-gnu
+
+      - name: Install System Dependencies (macOS Native)
         if: runner.os == 'macOS'
         run: |
           brew install cmake ffmpeg pkg-config
 
-      - name: Build backend
+      - name: Build backend (Native x86_64 and macOS arm64)
+        if: matrix.is_native_arm == true
         run: |
           mkdir -p build
           cd build
-          # Conan 2.x will generate the toolchain file in a subdirectory based on layout
           conan install ../backend --output-folder=. --build=missing -s build_type=Release
+          TOOLCHAIN_FILE=$(find . -name "conan_toolchain.cmake" -print -quit)
+          echo "Found toolchain file: $TOOLCHAIN_FILE"
+          cmake ../backend -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --config Release -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Build backend (Linux ARM64 Cross-compile)
+        if: matrix.os == 'linux' && matrix.arch == 'arm64' && matrix.is_native_arm == false
+        run: |
+          # Create conan profile for cross-compilation
+          cat <<EOF > arm64_host
+          [settings]
+          os=Linux
+          arch=armv8
+          compiler=gcc
+          compiler.version=11
+          compiler.libcxx=libstdc++11
+          compiler.cppstd=20
+          build_type=Release
           
-          # Use find to locate the toolchain file because Conan layout can be inconsistent
+          [conf]
+          tools.build:compiler_executables={'c': 'aarch64-linux-gnu-gcc', 'cpp': 'aarch64-linux-gnu-g++'}
+          EOF
+          
+          mkdir -p build
+          cd build
+          # Use both default (build) and arm64_host (host) profiles
+          conan install ../backend --output-folder=. --build=missing -pr:b=default -pr:h=../arm64_host -s build_type=Release
+          
           TOOLCHAIN_FILE=$(find . -name "conan_toolchain.cmake" -print -quit)
           echo "Found toolchain file: $TOOLCHAIN_FILE"
           
-          if [ -z "$TOOLCHAIN_FILE" ]; then
-            echo "Error: conan_toolchain.cmake not found"
-            exit 1
-          fi
-          
           cmake ../backend \
             -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
           
-          cmake --build . --config Release -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+          cmake --build . --config Release -j$(nproc)
 
+      - name: List workspace (Debug)
+        run: |
+          echo "Current directory: $(pwd)"
+          ls -R
+          
       - name: Package artifacts
         run: |
           mkdir -p release/bin
-          # Try to find the binary in common locations
-          cp bin/live2mp3 release/bin/ || cp build/bin/live2mp3 release/bin/ || find . -name live2mp3 -exec cp {} release/bin/ \; -quit || true
+          
+          # Use find to locate the binary more reliably
+          # It should be named 'live2mp3' and have execution permissions
+          # BSD find (macOS) doesn't support -executable, use -perm instead
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            BINARY_PATH=$(find . -type f -name "live2mp3" -perm +111 -not -path "./release/*" -not -path "./.git/*" -maxdepth 4 -print -quit)
+          else
+            BINARY_PATH=$(find . -type f -name "live2mp3" -executable -not -path "./release/*" -not -path "./.git/*" -maxdepth 4 -print -quit)
+          fi
+          
+          if [ -n "$BINARY_PATH" ]; then
+            echo "Found binary at: $BINARY_PATH"
+            cp "$BINARY_PATH" release/bin/live2mp3
+          else
+            # Fallback to common locations if find fails
+            echo "Binary not found via find, trying common paths..."
+            cp bin/live2mp3 release/bin/live2mp3 || cp build/live2mp3 release/bin/live2mp3 || cp build/bin/live2mp3 release/bin/live2mp3 || true
+          fi
+          
+          if [ ! -f "release/bin/live2mp3" ]; then
+            echo "Error: Could not find live2mp3 binary anywhere!"
+            exit 1
+          fi
+
           cp backend/user_config.toml release/bin/
           cp backend/config.json release/bin/
           
