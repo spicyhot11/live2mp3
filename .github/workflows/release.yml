@@ -78,7 +78,7 @@ jobs:
           install: |
             apt-get update
             apt-get install -y cmake ffmpeg pkg-config libsqlite3-dev libssl-dev python3-pip python3-venv git
-            pip3 install conan --break-system-packages
+            pip3 install conan
             conan profile detect --force
           run: |
             mkdir -p build
@@ -99,7 +99,12 @@ jobs:
           
           # Use find to locate the binary more reliably
           # It should be named 'live2mp3' and have execution permissions
-          BINARY_PATH=$(find . -type f -name "live2mp3" -executable -not -path "./release/*" -not -path "./.git/*" -print -quit)
+          # BSD find (macOS) doesn't support -executable, use -perm instead
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            BINARY_PATH=$(find . -type f -name "live2mp3" -perm +111 -not -path "./release/*" -not -path "./.git/*" -maxdepth 4 -print -quit)
+          else
+            BINARY_PATH=$(find . -type f -name "live2mp3" -executable -not -path "./release/*" -not -path "./.git/*" -maxdepth 4 -print -quit)
+          fi
           
           if [ -n "$BINARY_PATH" ]; then
             echo "Found binary at: $BINARY_PATH"
