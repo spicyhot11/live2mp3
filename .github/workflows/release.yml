@@ -32,7 +32,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Native builds (macOS arm64 and Ubuntu x86_64) or Host preparation for ARM emulation
+      # Native builds (macOS arm64 and Linux x86_64) or Host preparation for ARM emulation
       - name: Set up Python
         if: matrix.is_native_arm == true
         uses: actions/setup-python@v5
@@ -61,22 +61,15 @@ jobs:
         run: |
           mkdir -p build
           cd build
-          # Conan 2.x will generate the toolchain file in a subdirectory based on layout
           conan install ../backend --output-folder=. --build=missing -s build_type=Release
-          
-          # Use find to locate the toolchain file because Conan layout can be inconsistent
           TOOLCHAIN_FILE=$(find . -name "conan_toolchain.cmake" -print -quit)
           echo "Found toolchain file: $TOOLCHAIN_FILE"
-          
-          cmake ../backend \
-            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
-            -DCMAKE_BUILD_TYPE=Release
-          
+          cmake ../backend -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
-      # Emulated Build for Ubuntu ARM64 using QEMU
-      - name: Build backend (Ubuntu ARM64 via QEMU)
-        if: matrix.os == 'ubuntu' && matrix.arch == 'arm64' && matrix.is_native_arm == false
+      # Emulated Build for Linux ARM64 using QEMU
+      - name: Build backend (Linux ARM64 via QEMU)
+        if: matrix.os == 'linux' && matrix.arch == 'arm64' && matrix.is_native_arm == false
         uses: uraimo/run-on-arch-action@v2
         with:
           arch: aarch64
@@ -95,11 +88,33 @@ jobs:
             cmake ../backend -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" -DCMAKE_BUILD_TYPE=Release
             cmake --build . --config Release -j$(nproc)
 
+      - name: List workspace (Debug)
+        run: |
+          echo "Current directory: $(pwd)"
+          ls -R
+          
       - name: Package artifacts
         run: |
           mkdir -p release/bin
-          # Try to find the binary in common locations
-          cp bin/live2mp3 release/bin/ || cp build/live2mp3 release/bin/ || cp build/bin/live2mp3 release/bin/ || true
+          
+          # Use find to locate the binary more reliably
+          # It should be named 'live2mp3' and have execution permissions
+          BINARY_PATH=$(find . -type f -name "live2mp3" -executable -not -path "./release/*" -not -path "./.git/*" -print -quit)
+          
+          if [ -n "$BINARY_PATH" ]; then
+            echo "Found binary at: $BINARY_PATH"
+            cp "$BINARY_PATH" release/bin/live2mp3
+          else
+            # Fallback to common locations if find fails
+            echo "Binary not found via find, trying common paths..."
+            cp bin/live2mp3 release/bin/live2mp3 || cp build/live2mp3 release/bin/live2mp3 || cp build/bin/live2mp3 release/bin/live2mp3 || true
+          fi
+          
+          if [ ! -f "release/bin/live2mp3" ]; then
+            echo "Error: Could not find live2mp3 binary anywhere!"
+            exit 1
+          fi
+
           cp backend/user_config.toml release/bin/
           cp backend/config.json release/bin/
           
