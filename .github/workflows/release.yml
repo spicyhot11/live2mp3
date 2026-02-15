@@ -52,16 +52,31 @@ jobs:
 
       - name: Build backend
         run: |
-          mkdir build
+          mkdir -p build
           cd build
+          # Conan 2.x will generate the toolchain file in a subdirectory based on layout
           conan install ../backend --output-folder=. --build=missing -s build_type=Release
-          cmake ../backend -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release
+          
+          # Use find to locate the toolchain file because Conan layout can be inconsistent
+          TOOLCHAIN_FILE=$(find . -name "conan_toolchain.cmake" -print -quit)
+          echo "Found toolchain file: $TOOLCHAIN_FILE"
+          
+          if [ -z "$TOOLCHAIN_FILE" ]; then
+            echo "Error: conan_toolchain.cmake not found"
+            exit 1
+          fi
+          
+          cmake ../backend \
+            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
+            -DCMAKE_BUILD_TYPE=Release
+          
           cmake --build . --config Release -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
       - name: Package artifacts
         run: |
           mkdir -p release/bin
-          cp bin/live2mp3 release/bin/ || cp build/live2mp3 release/bin/ || true
+          # Try to find the binary in common locations
+          cp bin/live2mp3 release/bin/ || cp build/bin/live2mp3 release/bin/ || find . -name live2mp3 -exec cp {} release/bin/ \; -quit || true
           cp backend/user_config.toml release/bin/
           cp backend/config.json release/bin/
           
