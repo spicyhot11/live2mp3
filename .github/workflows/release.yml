@@ -115,47 +115,45 @@ jobs:
           
       - name: Package artifacts
         run: |
-          mkdir -p release/bin
+          mkdir -p staging
           
-          # Use find to locate the binary more reliably
-          # It should be named 'live2mp3' and have execution permissions
-          # BSD find (macOS) doesn't support -executable, use -perm instead
+          # Find binary
           if [[ "$OSTYPE" == "darwin"* ]]; then
-            BINARY_PATH=$(find . -type f -name "live2mp3" -perm +111 -not -path "./release/*" -not -path "./.git/*" -maxdepth 4 -print -quit)
+            BINARY_PATH=$(find . -type f -name "live2mp3" -perm +111 -not -path "./staging/*" -not -path "./.git/*" -maxdepth 4 -print -quit)
           else
-            BINARY_PATH=$(find . -type f -name "live2mp3" -executable -not -path "./release/*" -not -path "./.git/*" -maxdepth 4 -print -quit)
+            BINARY_PATH=$(find . -type f -name "live2mp3" -executable -not -path "./staging/*" -not -path "./.git/*" -maxdepth 4 -print -quit)
           fi
           
           if [ -n "$BINARY_PATH" ]; then
             echo "Found binary at: $BINARY_PATH"
-            cp "$BINARY_PATH" release/bin/live2mp3
+            cp "$BINARY_PATH" staging/live2mp3
           else
-            # Fallback to common locations if find fails
-            echo "Binary not found via find, trying common paths..."
-            cp bin/live2mp3 release/bin/live2mp3 || cp build/live2mp3 release/bin/live2mp3 || cp build/bin/live2mp3 release/bin/live2mp3 || true
-          fi
-          
-          if [ ! -f "release/bin/live2mp3" ]; then
-            echo "Error: Could not find live2mp3 binary anywhere!"
-            exit 1
+            # Fallback to common locations
+            cp bin/live2mp3 staging/live2mp3 || cp build/live2mp3 staging/live2mp3 || cp build/bin/live2mp3 staging/live2mp3 || exit 1
           fi
 
-          cp backend/user_config.toml release/bin/
-          cp backend/config.json release/bin/
+          # Copy configs
+          cp backend/user_config.toml staging/
+          cp backend/config.json staging/
           
-          # Rename binary based on platform
-          mv release/bin/live2mp3 release/bin/live2mp3-${{ matrix.os }}-${{ matrix.arch }}
+          # Create archive
+          ARCHIVE_NAME="live2mp3-${{ matrix.os }}-${{ matrix.arch }}"
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            # zip -j ignores directory structure
+            zip -j "${ARCHIVE_NAME}.zip" staging/*
+          else
+            tar -czvf "${ARCHIVE_NAME}.tar.gz" -C staging .
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: live2mp3-${{ matrix.os }}-${{ matrix.arch }}
-          path: release/
+          path: live2mp3-${{ matrix.os }}-${{ matrix.arch }}.*
 
   release:
     name: Create GitHub Release
     needs: build
-    # Only run on tags or manual dispatch
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
@@ -165,22 +163,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: Prepare release assets
-        run: |
-          mkdir -p assets
-          # Find all binaries and config files in downloaded artifacts
-          find artifacts -type f \( -name "live2mp3-*" -o -name "*.toml" -o -name "*.json" \) -exec cp -v {} assets/ \;
-          echo "Assets to be released:"
-          ls -lh assets/
+          merge-multiple: true
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: assets/*
+          files: artifacts/*
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: false
           prerelease: false
           generate_release_notes: true
-          # If workflow_dispatch and no tag, it might need a tag name. 
-          # Usually it's better to tag things.
