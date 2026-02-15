@@ -1,0 +1,94 @@
+# Live2MP3 用户配置文件
+# ------------------------------------------------------------
+# 提示：修改此文件后，部分配置项可能需要重启程序生效。
+
+# [scanner] 扫描器配置
+# 负责在指定目录中发现视频文件
+[scanner]
+# 支持的视频文件扩展名
+extensions = [ '.mp4', '.ts' ]
+
+    # 视频源目录配置 (可以定义多个 [[scanner.video_roots]])
+    [[scanner.video_roots]]
+    # 路径
+    path = '/home/code-dev/src/live2mp3/bin/data/videos1'
+    # 过滤模式: 'blacklist' (黑名单) 或 'whitelist' (白名单)
+    filter_mode = 'blacklist'
+    # 过滤规则列表: { pattern = '正则或字符串', type = 'exact|regex|glob' }
+    rules = []
+    # 是否允许删除源文件 (在转换/合并完成后)
+    enable_delete = false
+    # 删除时的过滤模式
+    delete_mode = 'blacklist'
+    # 删除时的过滤规则
+    delete_rules = []
+
+    [[scanner.video_roots]]
+    path = '/home/code-dev/src/live2mp3/bin/data/videos2'
+    filter_mode = 'blacklist'
+    rules = []
+    enable_delete = false
+    delete_mode = 'blacklist'
+    delete_rules = []
+
+# [output] 输出配置
+# 负责定义转换和合并后的文件存放位置及格式
+[output]
+# 音频/视频输出的根目录
+output_root = '/home/code-dev/src/live2mp3/bin/data/output'
+# 转换完成后是否保留原始视频文件 (全局开关)
+keep_original = false
+# 转换后的视频后缀 (默认 .mp4)
+video_extension = '.mp4'
+# 转换后的音频后缀 (默认 .mp3)
+audio_extension = '.mp3'
+
+# [scheduler] 调度器配置
+# 负责管理扫描周期、合并逻辑和任务分配
+[scheduler]
+# 目录扫描的时间间隔 (秒)
+scan_interval_seconds = 60
+# 片段合并的时间窗口 (秒)。在同一时刻录制的片段，若间隔小于此值则视为同一场直播。
+# 默认 7200 秒 (2 小时)
+merge_window_seconds = 7200
+# 结束等待时间 (秒)。最后一个片段停止更新超过此时间后，将触发合并操作。
+stop_waiting_seconds = 600
+# 文件稳定性检查次数。连续 N 次 MD5 校验一致才认为文件已停止写入。
+stability_checks = 2
+# 并行执行 FFmpeg 任务的 Worker 数量
+ffmpeg_worker_count = 4
+# 任务重试次数 (适用于转换和合并)
+ffmpeg_retry_count = 3
+
+# [temp] 临时文件配置
+[temp]
+# 临时工作目录，留空则使用系统默认或程序运行目录下的 temp
+temp_dir = ''
+# 临时空间限制 (MB)，0 表示无限制
+size_limit_mb = 0
+
+# [ffmpeg] FFmpeg 命令行模板
+# 注意：务必保留 {input} 和 {output} 占位符
+[ffmpeg]
+# 视频转换/压缩命令
+video_convert_command = 'ffmpeg -y -i "{input}" -c:v libsvtav1 -crf 30 -preset 6 -c:a aac -b:a 128k "{output}" 2>&1'
+# 提取/转换音频命令
+audio_convert_command = 'ffmpeg -y -i "{input}" -vn -acodec libmp3lame -q:a 2 "{output}" 2>&1'
+# 合并片段命令
+merge_command = 'ffmpeg -f concat -safe 0 -i "{input}" -c copy -y "{output}" 2>&1'
+
+# [ffmpeg_task] FFmpeg 任务服务配置
+[ffmpeg_task]
+# 最大同时并行的 FFmpeg 进程数
+maxConcurrentTasks = 2
+# 任务队列最大长度
+maxWaitingTasks = 10000
+# 耽个任务的超时时间 (秒)
+taskTimeoutSeconds = 600
+
+# [common_thread] 公共线程池配置 (后台辅助任务)
+[common_thread]
+# 线程数
+threadCount = 8
+# 线程池名称 (日志定位用)
+name = "CommonThreadPool"

@@ -1,11 +1,6 @@
 {
-    "listeners": [
-        {
-            "address": "0.0.0.0",
-            "port": 8080,
-            "https": false
-        }
-    ],
+    "document_root": "./dist",
+    "home_page": "index.html",
     "app": {
         "number_of_threads": 0,
         "enable_server_header": true,
@@ -13,7 +8,97 @@
         "log": {
             "logfile_base_name": "live2mp3",
             "log_path": "./logs",
-            "log_level": "DEBUG"
+            "log_level": "DEBUG",
+            "display_local_time": true
         }
-    }
+    },
+    "listeners": [
+        {
+            "address": "0.0.0.0",
+            "port": 8080,
+            "https": false
+        }
+    ],
+    "plugins": [
+        {
+            "name": "ConfigService",
+            "config": {
+                "config_path": "./user_config.toml"
+            },
+            "dependencies": []
+        },
+        {
+            "name": "DatabaseService",
+            "config": {
+                "db_path": "./live2mp3.db"
+            },
+            "dependencies": []
+        },
+        {
+            "name": "PendingFileService",
+            "config": {},
+            "dependencies": [
+                "ConfigService"
+            ]
+        },
+        {
+            "name": "ConverterService",
+            "config": {},
+            "dependencies": [
+                "ConfigService"
+            ]
+        },
+        {
+            "name": "MergerService",
+            "config": {},
+            "dependencies": [
+                "ConfigService"
+            ]
+        },
+        {
+            "name": "ScannerService",
+            "config": {},
+            "dependencies": [
+                "ConfigService"
+            ]
+        },
+        {
+            "name": "BatchTaskService",
+            "config": {},
+            "dependencies": [
+                "ConfigService",
+                "DatabaseService",
+                "PendingFileService"
+            ]
+        },
+        {
+            "name": "SchedulerService",
+            "config": {},
+            "dependencies": [
+                "ConfigService",
+                "MergerService",
+                "ScannerService",
+                "ConverterService",
+                "BatchTaskService",
+                "PendingFileService",
+                "FfmpegTaskService",
+                "CommonThreadService"
+            ]
+        },
+        {
+            "name": "FfmpegTaskService",
+            "config": {},
+            "dependencies": [
+                "CommonThreadService",
+                "ConfigService"
+            ]
+        },
+        {
+            "name": "CommonThreadService",
+            "config": {},
+            "dependencies": [
+                "ConfigService"
+            ]
+        }
+    ]
 }

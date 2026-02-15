@@ -1,19 +1,42 @@
 {
-    "cmake.configureOnOpen": true,
+    "cmake.configureOnOpen": false,
+    "cmake.sourceDirectory": "${workspaceFolder}/backend",
+    "cmake.buildDirectory": "${workspaceFolder}/backend/build/Debug",
     "files.associations": {
         "*.cc": "cpp",
         "*.h": "cpp"
     },
-    // 将虚拟环境的 bin 目录加入 PATH，确保能找到 conan
-    "terminal.integrated.env.linux": {
+    // macOS 虚拟环境配置
+    "terminal.integrated.env.osx": {
         "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}"
     },
+    // clangd 配置
     "clangd.path": "/usr/bin/clangd",
     "clangd.arguments": [
         "--compile-commands-dir=${workspaceFolder}/backend/build/Debug",
         "--background-index",
         "--completion-style=detailed",
-        "--header-insertion=never"
+        "--header-insertion=never",
+        "-j=4"
     ],
-    "cmake.sourceDirectory": "/home/code-dev/src/live2mp3/backend"
+    // C++ IntelliSense 配置
+    "[cpp]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+        "editor.formatOnSave": true
+    },
+    // 启用 CMake Tools
+    "cmake.useCMakePresets": "auto",
+    // 隐藏某些文件/文件夹
+    "files.exclude": {
+        "**/build": false,
+        "**/build_debug": false
+    },
+
+    "// ============ conan ============": {},
+    "brew.bin": "/opt/homebrew/bin",
+    "claudeCode.disableLoginPrompt": true,
+    "claudeCode.environmentVariables": [
+        
+        
+    ]
 }

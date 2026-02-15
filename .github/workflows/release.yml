@@ -1,0 +1,90 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            arch: arm64
+            runner: macos-latest
+          - os: ubuntu
+            arch: x86_64
+            runner: ubuntu-latest
+          - os: ubuntu
+            arch: arm64
+            runner: ubuntu-24.04-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Conan
+        run: |
+          pip install conan
+          conan profile detect --force
+
+      - name: Install System Dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ffmpeg pkg-config libsqlite3-dev libssl-dev
+
+      - name: Install System Dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ffmpeg pkg-config
+
+      - name: Build backend
+        run: |
+          mkdir -p build
+          cd build
+          # Conan 2.x will generate the toolchain file in a subdirectory based on layout
+          conan install ../backend --output-folder=. --build=missing -s build_type=Release
+          
+          # Use find to locate the toolchain file because Conan layout can be inconsistent
+          TOOLCHAIN_FILE=$(find . -name "conan_toolchain.cmake" -print -quit)
+          echo "Found toolchain file: $TOOLCHAIN_FILE"
+          
+          if [ -z "$TOOLCHAIN_FILE" ]; then
+            echo "Error: conan_toolchain.cmake not found"
+            exit 1
+          fi
+          
+          cmake ../backend \
+            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
+            -DCMAKE_BUILD_TYPE=Release
+          
+          cmake --build . --config Release -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Package artifacts
+        run: |
+          mkdir -p release/bin
+          # Try to find the binary in common locations
+          cp bin/live2mp3 release/bin/ || cp build/bin/live2mp3 release/bin/ || find . -name live2mp3 -exec cp {} release/bin/ \; -quit || true
+          cp backend/user_config.toml release/bin/
+          cp backend/config.json release/bin/
+          
+          # Rename binary based on platform
+          mv release/bin/live2mp3 release/bin/live2mp3-${{ matrix.os }}-${{ matrix.arch }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: live2mp3-${{ matrix.os }}-${{ matrix.arch }}
+          path: release/

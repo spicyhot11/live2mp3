@@ -1,7 +1,11 @@
 [requires]
-drogon/1.9.0
+drogon/1.9.11
 nlohmann_json/3.11.3
 fmt/10.2.1
+sqlite3/3.45.0
+openssl/3.2.0
+tomlplusplus/3.4.0
+xxhash/0.8.2
 
 [generators]
 CMakeDeps

@@ -2,30 +2,12 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "(gdb/lldb) Launch Backend",
-            "type": "cppdbg",
+            "name": "Debug Backend (CodeLLDB)",
+            "type": "lldb", // 这里改为 lldb
             "request": "launch",
-            // 更新为新的 bin 目录
             "program": "${workspaceFolder}/bin/live2mp3",
-            "args": [],
-            "stopAtEntry": false,
-            // 调试时的工作目录设为 bin/，这样能找到 config.json
             "cwd": "${workspaceFolder}/bin",
-            "environment": [],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ],
-            // 使用我们新定义的聚合任务，确保配置被复制
-            "preLaunchTask": "Build & Setup",
-            "osx": {
-                "MIMode": "lldb"
-            }
+            "preLaunchTask": "Build & Setup (Debug)"
         },
         {
             "name": "Debug Frontend (Chrome)",
@@ -35,6 +17,9 @@
             "webRoot": "${workspaceFolder}/frontend/src",
             "sourceMapPathOverrides": {
                 "webpack:///./src/*": "${webRoot}/*"
+            },
+            "presentation": {
+                "hidden": false
             }
         }
     ],
@@ -42,9 +27,13 @@
         {
             "name": "Full Stack Debug",
             "configurations": [
-                "(gdb/lldb) Launch Backend",
+                "Debug Backend (CodeLLDB)",
                 "Debug Frontend (Chrome)"
-            ]
+            ],
+            "presentation": {
+                "group": "group1",
+                "order": 1
+            }
         }
     ]
 }
