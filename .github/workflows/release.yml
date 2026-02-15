@@ -26,37 +26,41 @@ jobs:
           - os: linux
             arch: arm64
             runner: ubuntu-latest
-            is_native_arm: false
+            is_native_arm: false # We use cross-compilation on Linux for ARM64
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Native builds (macOS arm64 and Linux x86_64) or Host preparation for ARM emulation
+      # Setup Python and Conan (Common for all platforms)
       - name: Set up Python
-        if: matrix.is_native_arm == true
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - name: Install Conan (Native)
-        if: matrix.is_native_arm == true
+      - name: Install Conan
         run: |
           pip install conan
           conan profile detect --force
 
-      - name: Install System Dependencies (Linux Native)
-        if: runner.os == 'Linux' && matrix.is_native_arm == true
+      - name: Install System Dependencies (Linux x86_64 Native)
+        if: runner.os == 'Linux' && matrix.arch == 'x86_64'
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ffmpeg pkg-config libsqlite3-dev libssl-dev
+
+      - name: Install System Dependencies (Linux ARM64 Cross-compile)
+        if: runner.os == 'Linux' && matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ffmpeg pkg-config g++-aarch64-linux-gnu
 
       - name: Install System Dependencies (macOS Native)
         if: runner.os == 'macOS'
         run: |
           brew install cmake ffmpeg pkg-config
 
-      - name: Build backend (Native)
+      - name: Build backend (Native x86_64 and macOS arm64)
         if: matrix.is_native_arm == true
         run: |
           mkdir -p build
@@ -67,26 +71,41 @@ jobs:
           cmake ../backend -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
-      # Emulated Build for Linux ARM64 using QEMU
-      - name: Build backend (Linux ARM64 via QEMU)
+      - name: Build backend (Linux ARM64 Cross-compile)
         if: matrix.os == 'linux' && matrix.arch == 'arm64' && matrix.is_native_arm == false
-        uses: uraimo/run-on-arch-action@v2
-        with:
-          arch: aarch64
-          distro: ubuntu22.04
-          githubToken: ${{ github.token }}
-          install: |
-            apt-get update
-            apt-get install -y cmake ffmpeg pkg-config libsqlite3-dev libssl-dev python3-pip python3-venv git
-            pip3 install conan
-            conan profile detect --force
-          run: |
-            mkdir -p build
-            cd build
-            conan install ../backend --output-folder=. --build=missing -s build_type=Release
-            TOOLCHAIN_FILE=$(find . -name "conan_toolchain.cmake" -print -quit)
-            cmake ../backend -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" -DCMAKE_BUILD_TYPE=Release
-            cmake --build . --config Release -j$(nproc)
+        run: |
+          # Create conan profile for cross-compilation
+          cat <<EOF > arm64_host
+          [settings]
+          os=Linux
+          arch=armv8
+          compiler=gcc
+          compiler.version=11
+          compiler.libcxx=libstdc++11
+          compiler.cppstd=20
+          build_type=Release
+          
+          [conf]
+          tools.build:compiler_executables={'c': 'aarch64-linux-gnu-gcc', 'cpp': 'aarch64-linux-gnu-g++'}
+          EOF
+          
+          mkdir -p build
+          cd build
+          # Use both default (build) and arm64_host (host) profiles
+          conan install ../backend --output-folder=. --build=missing -pr:b=default -pr:h=../arm64_host -s build_type=Release
+          
+          TOOLCHAIN_FILE=$(find . -name "conan_toolchain.cmake" -print -quit)
+          echo "Found toolchain file: $TOOLCHAIN_FILE"
+          
+          cmake ../backend \
+            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
+          
+          cmake --build . --config Release -j$(nproc)
 
       - name: List workspace (Debug)
         run: |
