@@ -1,0 +1,75 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            arch: arm64
+            runner: macos-latest
+          - os: ubuntu
+            arch: x86_64
+            runner: ubuntu-latest
+          - os: ubuntu
+            arch: arm64
+            runner: ubuntu-24.04-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Conan
+        run: |
+          pip install conan
+          conan profile detect --force
+
+      - name: Install System Dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ffmpeg pkg-config libsqlite3-dev libssl-dev
+
+      - name: Install System Dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ffmpeg pkg-config
+
+      - name: Build backend
+        run: |
+          mkdir build
+          cd build
+          conan install ../backend --output-folder=. --build=missing -s build_type=Release
+          cmake ../backend -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --config Release -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Package artifacts
+        run: |
+          mkdir -p release/bin
+          cp bin/live2mp3 release/bin/ || cp build/live2mp3 release/bin/ || true
+          cp backend/user_config.toml release/bin/
+          cp backend/config.json release/bin/
+          
+          # Rename binary based on platform
+          mv release/bin/live2mp3 release/bin/live2mp3-${{ matrix.os }}-${{ matrix.arch }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: live2mp3-${{ matrix.os }}-${{ matrix.arch }}
+          path: release/
