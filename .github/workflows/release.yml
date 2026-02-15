@@ -165,11 +165,31 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/*
-          token: ${{ secrets.GITHUB_TOKEN }}
-          draft: false
-          prerelease: false
-          generate_release_notes: true
+      - name: Create or Update Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          # Fallback for workflow_dispatch if no tag
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && ! "$TAG_NAME" =~ ^v ]]; then
+            TAG_NAME="latest"
+          fi
+
+          echo "Targeting release tag: $TAG_NAME"
+
+          # Create release if it doesn't exist (ignore error if exists)
+          gh release create "$TAG_NAME" \
+            --title "$TAG_NAME" \
+            --generate-notes \
+            || echo "Release $TAG_NAME already exists or could not be created directly."
+
+          # Upload artifacts with clobber (overwrite)
+          # Use nullglob to handle the "fail_on_unmatched_files: false" requirement
+          shopt -s nullglob
+          assets=(artifacts/*)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "No assets found in artifacts/ directory. Skipping upload."
+          else
+            echo "Uploading assets: ${assets[@]}"
+            gh release upload "$TAG_NAME" "${assets[@]}" --clobber
+          fi
